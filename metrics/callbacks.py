@@ -161,7 +161,7 @@ class MetricsCallback:
         loss = row.get("loss") or {}
         loss_s = " ".join(f"{k}={self._fmt(v)}" for k, v in loss.items()) or "—"
         gp = row.get("grad_pct") or {}
-        grad_s = "/".join(self._fmt(gp.get(k), 1) for k in ("backbone", "neck", "head"))
+        grad_s = "/".join(self._fmt(gp.get(k), 4) for k in ("backbone", "neck", "head"))
         print(
             f"\n[metrics] epoch {row['epoch']} (val)  "
             f"mAP50={self._fmt(row.get('map50'))}  "

@@ -83,11 +83,11 @@ def build_report(
         "",
         "| Stage | mean ms |",
         "|---|---|",
-        f"| preprocess | {_fmt((lat.get('preprocess') or {}).get('mean_ms'), 2)} |",
-        f"| infer | {_fmt((lat.get('infer') or {}).get('mean_ms'), 2)} |",
-        f"| post | {_fmt((lat.get('post') or {}).get('mean_ms'), 2)} |",
-        f"| e2e | {_fmt((lat.get('e2e') or {}).get('mean_ms'), 2)} |",
-        f"| FPS | {_fmt(lat.get('fps'), 2)} |",
+        f"| preprocess | {_fmt((lat.get('preprocess') or {}).get('mean_ms'), 4)} |",
+        f"| infer | {_fmt((lat.get('infer') or {}).get('mean_ms'), 4)} |",
+        f"| post | {_fmt((lat.get('post') or {}).get('mean_ms'), 4)} |",
+        f"| e2e | {_fmt((lat.get('e2e') or {}).get('mean_ms'), 4)} |",
+        f"| FPS | {_fmt(lat.get('fps'), 4)} |",
         "",
         "## Model cost",
         "",
@@ -116,7 +116,7 @@ def build_report(
     for row in summary.get("latency_accuracy_curve") or []:
         lines.append(
             f"| {row.get('imgsz')} | {_fmt(row.get('map50'))} | {_fmt(row.get('map50_95'))} "
-            f"| {_fmt(row.get('e2e_mean_ms'), 2)} | {_fmt(row.get('fps'), 2)} |"
+            f"| {_fmt(row.get('e2e_mean_ms'), 4)} | {_fmt(row.get('fps'), 4)} |"
         )
 
     lines += [
@@ -128,7 +128,7 @@ def build_report(
     ]
     for r in epochs:
         gp = r.get("grad_pct") or {}
-        g = "/".join(_fmt(gp.get(k), 1) for k in ("backbone", "neck", "head"))
+        g = "/".join(_fmt(gp.get(k), 4) for k in ("backbone", "neck", "head"))
         lines.append(
             f"| {r.get('epoch')} | {_fmt(r.get('map50_95'))} | {_fmt(r.get('precision'))} "
             f"| {_fmt(r.get('recall'))} | {_fmt(r.get('f1'))} | {g} |"
