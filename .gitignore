@@ -1,0 +1,42 @@
+# Secrets
+.env
+.env.*
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.Python
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Dataset (clone locally; see README)
+data/
+
+# Unused third-party checkout
+yolov5/
+
+# Training / export artifacts
+runs/
+*.pt
+*.onnx
+*.engine
+*.mlmodel
+*.tflite
+
+# Demo weights: keep folder + manifest, ignore checkpoints
+weights/*.pt
+
+# Reports: keep markdown/json; ignore media dumps
+reports/**/*.png
+reports/**/*.jpg
+reports/**/*.jpeg
+reports/**/*.pt
+reports/figures_raw/
+
+# Local previews / OS
+random_sample.png
+.DS_Store
+*.log

@@ -1,0 +1,19 @@
+{
+  "updated_utc": "2026-09-27T14:33:46.977515+00:00",
+  "latest": {
+    "file": "latest.pt",
+    "points_to": "uav2uav_yolo26n_baseline_best_20260927_143346.pt",
+    "exp_name": "uav2uav_yolo26n_baseline",
+    "saved_utc": "2026-09-27T14:33:46.977515+00:00"
+  },
+  "entries": [
+    {
+      "exp_name": "uav2uav_yolo26n_baseline",
+      "tag": "best",
+      "saved_utc": "2026-09-27T14:33:46.977515+00:00",
+      "file": "uav2uav_yolo26n_baseline_best_20260927_143346.pt",
+      "source": "runs/uav2uav_yolo26n_baseline/weights/best.pt",
+      "bytes": 5337989
+    }
+  ]
+}
