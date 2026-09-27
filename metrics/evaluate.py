@@ -166,10 +166,18 @@ def measure_latency(model: YOLO, image_paths: list, imgsz: int = 640, warmup: in
     def pack(xs):
         arr = np.asarray(xs, dtype=np.float64)
         if arr.size == 0:
-            return {"mean_ms": None, "std_ms": None, "samples_ms": []}
+            return {
+                "mean_ms": None,
+                "std_ms": None,
+                "p50_ms": None,
+                "p95_ms": None,
+                "samples_ms": [],
+            }
         return {
             "mean_ms": float(arr.mean()),
             "std_ms": float(arr.std()),
+            "p50_ms": float(np.percentile(arr, 50)),
+            "p95_ms": float(np.percentile(arr, 95)),
             "samples_ms": arr.tolist(),
         }
 
@@ -261,9 +269,15 @@ def run(
     except ValueError:
         weights_str = str(weights)
 
+    try:
+        device = str(next(model.model.parameters()).device)
+    except Exception:
+        device = "unknown"
+
     summary = {
         "weights": weights_str,
         "imgsz": imgsz,
+        "device": device,
         "accuracy": {
             "map50": test_m.get("map50"),
             "map50_95": test_m.get("map50_95"),

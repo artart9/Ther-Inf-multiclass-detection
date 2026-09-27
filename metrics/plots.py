@@ -56,18 +56,25 @@ def plot_epochs(metrics_dir: Path) -> None:
         fig.savefig(out / "epoch_losses.png", dpi=150)
         plt.close(fig)
 
-    # Grad %
-    fig, ax = plt.subplots(figsize=(8, 4))
-    for g in ("backbone", "neck", "head"):
-        ys = [(r.get("grad_pct") or {}).get(g) for r in rows]
-        ax.plot(epochs, ys, label=g)
-    ax.set_xlabel("epoch")
-    ax.set_ylabel("% change vs prev epoch")
-    ax.legend()
-    ax.set_title("Gradient norm change by block")
-    fig.tight_layout()
-    fig.savefig(out / "epoch_grad_pct.png", dpi=150)
-    plt.close(fig)
+    # Grad % — skip epoch 1 (null / huge early jump wrecks the y-scale)
+    grad_rows = [r for r in rows if int(r.get("epoch", 0)) >= 2]
+    grad_rows = [
+        r for r in grad_rows
+        if any((r.get("grad_pct") or {}).get(g) is not None for g in ("backbone", "neck", "head"))
+    ]
+    if grad_rows:
+        fig, ax = plt.subplots(figsize=(8, 4))
+        xs = [r["epoch"] for r in grad_rows]
+        for g in ("backbone", "neck", "head"):
+            ys = [(r.get("grad_pct") or {}).get(g) for r in grad_rows]
+            ax.plot(xs, ys, label=g)
+        ax.set_xlabel("epoch")
+        ax.set_ylabel("% change vs previous epoch")
+        ax.legend()
+        ax.set_title("Gradient norm change by block (from epoch 2)")
+        fig.tight_layout()
+        fig.savefig(out / "epoch_grad_pct.png", dpi=150)
+        plt.close(fig)
 
 
 def plot_summary(metrics_dir: Path) -> None:

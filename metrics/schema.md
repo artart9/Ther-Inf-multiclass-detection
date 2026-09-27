@@ -14,10 +14,13 @@ Definitions used by the training callback and final evaluation. Keep these stabl
 - Small object: box area `< 32 * 32` pixels on the letterboxed model input
 - Small AP: AP@0.5 on GT/pred pairs where the GT box is small
 
-## Gradient % (per epoch)
+## Gradient metrics (per epoch)
 For each group `g ∈ {backbone, neck, head}`:
 1. Mean grad L2 norm over that epoch’s training batches → `grad_norm[g]`
-2. `grad_pct[g] = 100 * |G_t - G_{t-1}| / (G_{t-1} + 1e-12)` (null on epoch 1)
+   - **Unit:** none (raw Euclidean magnitude of ∂L/∂w over the group’s parameters)
+2. `grad_pct[g] = 100 * |G_t - G_{t-1}| / (G_{t-1} + 1e-12)`
+   - **Unit:** **percent (%)** change vs the previous epoch
+   - **null on epoch 1** (no previous epoch); plots start at **epoch 2**
 3. Groups on YOLO26 `model.model`:
    - **backbone**: layers before the first `Concat`
    - **head**: final `Detect` layer
@@ -26,8 +29,10 @@ For each group `g ∈ {backbone, neck, head}`:
 ## Latency (final only)
 - batch = 1, warmup = 30, sample = 200 test images
 - Stages: preprocess / infer / post / e2e (ms)
-- Full e2e samples stored in `summary.json` for distribution plots
+- Stats: mean, std, p50, p95 + full `samples_ms` list
 - FPS = `1000 / mean(e2e_ms)`
+- Saved per run to `reports/<exp>/latency.json` (+ local `runs/.../metrics/`)
+- Cross-run index: `reports/compare/latency_accuracy.jsonl`
 
 ## Efficiency (final only)
 - `map_per_mb = map50 / weight_mb`
@@ -37,10 +42,16 @@ For each group `g ∈ {backbone, neck, head}`:
 
 ## Outputs
 ```text
-runs/<exp>/metrics/
+runs/<exp>/metrics/          # local only (gitignored)
+  epochs.jsonl, summary.json, plot_data.json, plots/
+
+reports/<exp>/               # one folder per run (committed)
+  report.md
+  report.json
+  plot_data.json
   epochs.jsonl
-  summary.json
-  plots/
-reports/<exp>.md
-reports/<exp>.json
+  latency.json
+
+reports/compare/             # shared cross-run indexes
+  latency_accuracy.jsonl
 ```

@@ -1,10 +1,10 @@
 {
-  "updated_utc": "2026-09-27T14:33:46.977515+00:00",
+  "updated_utc": "2026-09-27T18:36:39.536189+00:00",
   "latest": {
     "file": "latest.pt",
-    "points_to": "uav2uav_yolo26n_baseline_best_20260927_143346.pt",
+    "points_to": "uav2uav_yolo26n_baseline_best_20260927_183639.pt",
     "exp_name": "uav2uav_yolo26n_baseline",
-    "saved_utc": "2026-09-27T14:33:46.977515+00:00"
+    "saved_utc": "2026-09-27T18:36:39.536189+00:00"
   },
   "entries": [
     {
@@ -14,6 +14,22 @@
       "file": "uav2uav_yolo26n_baseline_best_20260927_143346.pt",
       "source": "runs/uav2uav_yolo26n_baseline/weights/best.pt",
       "bytes": 5337989
+    },
+    {
+      "exp_name": "uav2uav_yolo26n_baseline",
+      "tag": "best",
+      "saved_utc": "2026-09-27T18:28:43.316105+00:00",
+      "file": "uav2uav_yolo26n_baseline_best_20260927_182843.pt",
+      "source": "runs/uav2uav_yolo26n_baseline/weights/best.pt",
+      "bytes": 5326725
+    },
+    {
+      "exp_name": "uav2uav_yolo26n_baseline",
+      "tag": "best",
+      "saved_utc": "2026-09-27T18:36:39.536189+00:00",
+      "file": "uav2uav_yolo26n_baseline_best_20260927_183639.pt",
+      "source": "runs/uav2uav_yolo26n_baseline/weights/best.pt",
+      "bytes": 5326725
     }
   ]
 }

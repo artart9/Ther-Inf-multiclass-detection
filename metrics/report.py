@@ -30,12 +30,13 @@ def build_report(
     notes: str = "",
 ) -> Path:
     """
-    Build reports/<exp_name>.md and reports/<exp_name>.json from
+    Build reports/<exp_name>/report.md and report.json from
     runs/<exp>/metrics/{epochs.jsonl,summary.json}.
     """
+    from metrics.meta_store import run_report_dir
+
     metrics_dir = Path(metrics_dir)
-    reports_dir = Path(reports_dir)
-    reports_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = run_report_dir(reports_dir, exp_name)
 
     summary_path = metrics_dir / "summary.json"
     epochs_path = metrics_dir / "epochs.jsonl"
@@ -135,39 +136,37 @@ def build_report(
 
     lines += [
         "",
+        "## Artifacts in this folder",
+        "",
+        f"- `report.md` / `report.json`",
+        f"- `plot_data.json`, `epochs.jsonl`, `latency.json`",
+        f"- Compare index: `{_rel(Path(reports_dir) / 'compare' / 'latency_accuracy.jsonl')}`",
+        "",
         "## Local artifacts (gitignored)",
         "",
         f"- Metrics: `{_rel(metrics_dir)}`",
         f"- Plots: `{_rel(metrics_dir / 'plots')}`",
         f"- Summary JSON: `{_rel(summary_path)}`",
         "",
-        "_Optional: copy selected plots into `reports/figures/` for write-ups._",
-        "",
     ]
 
-    out = reports_dir / f"{exp_name}.md"
+    out = out_dir / "report.md"
     out.write_text("\n".join(lines))
 
-    slim = {
+    full = {
         "exp_name": exp_name,
         "generated_utc": datetime.now(timezone.utc).isoformat(),
+        "device": summary.get("device"),
+        "imgsz": summary.get("imgsz"),
+        "weights": summary.get("weights"),
         "summary": {
             "accuracy": acc,
-            "latency_means": {
-                "pre": (lat.get("preprocess") or {}).get("mean_ms"),
-                "infer": (lat.get("infer") or {}).get("mean_ms"),
-                "post": (lat.get("post") or {}).get("mean_ms"),
-                "e2e": (lat.get("e2e") or {}).get("mean_ms"),
-                "fps": lat.get("fps"),
-            },
-            "model": {
-                k: model.get(k)
-                for k in ("params", "gflops", "weight_mb", "peak_rss_mb", "peak_vram_mb")
-            },
+            "latency": lat,
+            "model": model,
             "efficiency": eff,
             "latency_accuracy_curve": summary.get("latency_accuracy_curve"),
         },
         "epochs": epochs,
     }
-    (reports_dir / f"{exp_name}.json").write_text(json.dumps(slim, indent=2) + "\n")
+    (out_dir / "report.json").write_text(json.dumps(full, indent=2) + "\n")
     return out

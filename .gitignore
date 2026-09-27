@@ -29,7 +29,7 @@ runs/
 # Demo weights: keep folder + manifest, ignore checkpoints
 weights/*.pt
 
-# Reports: keep markdown/json; ignore media dumps
+# Reports: keep markdown/json/meta; ignore media dumps
 reports/**/*.png
 reports/**/*.jpg
 reports/**/*.jpeg
