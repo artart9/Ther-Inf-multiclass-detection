@@ -39,7 +39,15 @@ def _group_indices(model) -> dict:
     }
 
 
+def _unwrap(model):
+    """Unwrap DP/DDP so layer indices match DetectionModel.model."""
+    while hasattr(model, "module"):
+        model = model.module
+    return model
+
+
 def _grad_norm_by_group(model, groups: dict) -> dict:
+    model = _unwrap(model)
     layers = model.model if hasattr(model, "model") else model
     out = {}
     for name, idxs in groups.items():
@@ -63,26 +71,39 @@ class MetricsCallback:
         self.prev_grad = {"backbone": None, "neck": None, "head": None}
         self.epoch_grad_sum = {"backbone": 0.0, "neck": 0.0, "head": 0.0}
         self.epoch_grad_count = 0
+        self._orig_optimizer_step = None
 
     def attach(self, model) -> None:
         model.add_callback("on_pretrain_routine_end", self.on_pretrain_routine_end)
-        model.add_callback("on_train_batch_end", self.on_train_batch_end)
         model.add_callback("on_fit_epoch_end", self.on_fit_epoch_end)
 
-    def on_pretrain_routine_end(self, trainer) -> None:
-        self.groups = _group_indices(trainer.model)
-        self.epochs_path.write_text("")
-        self.prev_grad = {"backbone": None, "neck": None, "head": None}
-        self.epoch_grad_sum = {"backbone": 0.0, "neck": 0.0, "head": 0.0}
-        self.epoch_grad_count = 0
-
-    def on_train_batch_end(self, trainer) -> None:
+    def _record_grads(self, trainer) -> None:
         if self.groups is None:
             return
         norms = _grad_norm_by_group(trainer.model, self.groups)
         for k, v in norms.items():
             self.epoch_grad_sum[k] += v
         self.epoch_grad_count += 1
+
+    def on_pretrain_routine_end(self, trainer) -> None:
+        self.groups = _group_indices(_unwrap(trainer.model))
+        self.epochs_path.write_text("")
+        self.prev_grad = {"backbone": None, "neck": None, "head": None}
+        self.epoch_grad_sum = {"backbone": 0.0, "neck": 0.0, "head": 0.0}
+        self.epoch_grad_count = 0
+
+        # Ultralytics runs on_train_batch_end *after* optimizer_step() → zero_grad(),
+        # so grads are already cleared there. Sample just before the real step.
+        orig = trainer.optimizer_step
+        if not getattr(orig, "_metrics_grad_wrapped", False):
+
+            def _step_with_grad_capture():
+                self._record_grads(trainer)
+                return orig()
+
+            _step_with_grad_capture._metrics_grad_wrapped = True
+            trainer.optimizer_step = _step_with_grad_capture
+            self._orig_optimizer_step = orig
 
     def on_fit_epoch_end(self, trainer) -> None:
         epochs_planned = int(getattr(trainer, "epochs", 0) or 0)

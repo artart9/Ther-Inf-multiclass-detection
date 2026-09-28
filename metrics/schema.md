@@ -16,7 +16,8 @@ Definitions used by the training callback and final evaluation. Keep these stabl
 
 ## Gradient metrics (per epoch)
 For each group `g ∈ {backbone, neck, head}`:
-1. Mean grad L2 norm over that epoch’s training batches → `grad_norm[g]`
+1. Mean grad L2 norm over that epoch’s **optimizer steps** → `grad_norm[g]`
+   - Sampled immediately before Ultralytics `optimizer_step()` (which zeros grads)
    - **Unit:** none (raw Euclidean magnitude of ∂L/∂w over the group’s parameters)
 2. `grad_pct[g] = 100 * |G_t - G_{t-1}| / (G_{t-1} + 1e-12)`
    - **Unit:** **percent (%)** change vs the previous epoch
