@@ -1,0 +1,35 @@
+{
+  "summary": [
+    {
+      "quantize": "fp32",
+      "n": 78,
+      "mean_ms": 0.7574286667547242,
+      "p50_ms": 0.7572479989903513,
+      "fps": 1320.256340817672,
+      "map50": 0.960932566630853,
+      "backend": "tensorrt_fp32",
+      "device": "cuda:NVIDIA L4"
+    },
+    {
+      "quantize": "fp16",
+      "n": 78,
+      "mean_ms": 0.5498561411000898,
+      "p50_ms": 0.549700000192388,
+      "fps": 1818.6575092156165,
+      "map50": 0.960932566630853,
+      "backend": "tensorrt_fp16",
+      "device": "cuda:NVIDIA L4"
+    },
+    {
+      "quantize": "int8",
+      "n": 86,
+      "mean_ms": 0.5312061046974714,
+      "p50_ms": 0.5309620000844006,
+      "fps": 1882.5084861732014,
+      "map50": 0.960932566630853,
+      "backend": "tensorrt_int8",
+      "device": "cuda:NVIDIA L4"
+    }
+  ],
+  "n_samples": 242
+}

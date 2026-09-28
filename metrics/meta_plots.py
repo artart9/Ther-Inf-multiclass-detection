@@ -30,6 +30,106 @@ from metrics.viz_style import (
 
 DEFAULT_IMGSZ = (128, 160, 256, 320)
 DEFAULT_NAME_TMPL = "uav2uav_yolo26n_baseline_imgsz{imgsz}"
+DEFAULT_QUANT_EXPS = (
+    "baseline_imgsz160_fp32",
+    "baseline_imgsz160_fp16",
+    "baseline_imgsz160_int8",
+)
+QUANT_ORDER = ("fp32", "fp16", "int8")
+
+
+def load_quantize_latency_rows(
+    reports_dir: Path,
+    exp_names: tuple[str, ...] | list[str] = DEFAULT_QUANT_EXPS,
+) -> list[dict]:
+    """Load per-sample e2e latency from reports/<exp>/latency.json for boxplots."""
+    rows: list[dict] = []
+    for exp in exp_names:
+        path = Path(reports_dir) / exp / "latency.json"
+        if not path.exists():
+            raise FileNotFoundError(f"Missing latency file: {path}")
+        data = json.loads(path.read_text())
+        stages = data.get("stages") or {}
+        e2e = stages.get("e2e") or {}
+        samples = list(e2e.get("samples_ms") or [])
+        if not samples:
+            raise ValueError(f"No e2e samples_ms in {path}")
+        quantize = str(data.get("quantize") or exp.rsplit("_", 1)[-1]).lower()
+        for ms in samples:
+            rows.append(
+                {
+                    "exp_name": data.get("exp_name", exp),
+                    "quantize": quantize,
+                    "backend": data.get("backend"),
+                    "device": data.get("device"),
+                    "imgsz": data.get("imgsz"),
+                    "e2e_ms": float(ms),
+                    "e2e_mean_ms": e2e.get("mean_ms"),
+                    "fps": data.get("fps"),
+                    "map50": (data.get("accuracy") or {}).get("map50"),
+                }
+            )
+    return rows
+
+
+def plot_quantize_latency_boxplot(
+    sample_rows: list[dict],
+    out_dir: Path,
+    title: str = "Inference latency by TensorRT precision (imgsz=160)",
+) -> list[Path]:
+    """Bar chart of mean e2e latency across fp32 / fp16 / int8 (y from 0)."""
+    apply_theme()
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    colors = palette()
+    written: list[Path] = []
+
+    present = {str(r["quantize"]) for r in sample_rows}
+    order = [q for q in QUANT_ORDER if q in present]
+    order += sorted(present - set(order))
+    by_q: dict[str, list[float]] = {q: [] for q in order}
+    for r in sample_rows:
+        by_q[str(r["quantize"])].append(float(r["e2e_ms"]))
+
+    means = [sum(by_q[q]) / len(by_q[q]) for q in order]
+    labels = [q.upper() for q in order]
+    bar_colors = [colors[i % len(colors)] for i in range(len(order))]
+
+    fig, ax = new_fig(FIGSIZE)
+    sns.barplot(x=labels, y=means, hue=labels, palette=bar_colors, legend=False, ax=ax, width=0.6)
+    ax.set_ylim(0, max(means) * 1.15 if means else 1.0)
+    for i, m in enumerate(means):
+        ax.text(i, m, f"{m:.3f}", ha="center", va="bottom", fontsize=11, fontweight="semibold")
+    finish_ax(
+        ax,
+        title=title,
+        xlabel="TensorRT precision",
+        ylabel="e2e latency (ms)",
+    )
+    written.append(save_fig(fig, out_dir / "quantize_latency_boxplot.png"))
+
+    fig_p = go.Figure(
+        data=[
+            go.Bar(
+                x=labels,
+                y=means,
+                marker_color=[
+                    f"rgb({int(c[0]*255)},{int(c[1]*255)},{int(c[2]*255)})" for c in bar_colors
+                ],
+                text=[f"{m:.3f}" for m in means],
+                textposition="outside",
+                hovertemplate="%{x}: %{y:.4f} ms<extra></extra>",
+            )
+        ]
+    )
+    y_max = max(means) * 1.2 if means else 1.0
+    fig_p.update_layout(**PLOTLY_LAYOUT, title=title, showlegend=False)
+    fig_p.update_xaxes(title_text="TensorRT precision")
+    fig_p.update_yaxes(title_text="e2e latency (ms)", range=[0, y_max])
+    html = out_dir / "quantize_latency_boxplot.html"
+    fig_p.write_html(html, include_plotlyjs="cdn")
+    written.append(html)
+    return written
 
 
 def load_imgsz_rows(
@@ -289,36 +389,79 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--out-dir", type=Path, default=ROOT / "reports" / "compare")
     p.add_argument("--imgsz", type=int, nargs="+", default=list(DEFAULT_IMGSZ))
     p.add_argument("--name-tmpl", default=DEFAULT_NAME_TMPL)
+    p.add_argument(
+        "--quantize-exps",
+        nargs="+",
+        default=list(DEFAULT_QUANT_EXPS),
+        help="Experiment folders for quantization latency boxplot",
+    )
+    p.add_argument(
+        "--only-quantize",
+        action="store_true",
+        help="Only build the quantization latency boxplot",
+    )
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    rows = load_imgsz_rows(args.reports_dir, args.imgsz, args.name_tmpl)
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
-
     written = []
-    written.extend(plot_latency_gflops_vs_imgsz(rows, out))
-    written.extend(plot_map_vs_latency_gflops(rows, out))
-    written.extend(plot_small_object_vs_gflops(rows, out))
-    data_path = out / "imgsz_latency_gflops.json"
-    data_path.write_text(json.dumps({"rows": rows}, indent=2) + "\n")
+
+    if not args.only_quantize:
+        rows = load_imgsz_rows(args.reports_dir, args.imgsz, args.name_tmpl)
+        written.extend(plot_latency_gflops_vs_imgsz(rows, out))
+        written.extend(plot_map_vs_latency_gflops(rows, out))
+        written.extend(plot_small_object_vs_gflops(rows, out))
+        data_path = out / "imgsz_latency_gflops.json"
+        data_path.write_text(json.dumps({"rows": rows}, indent=2) + "\n")
+        print(f"Data: {data_path}")
+        for r in rows:
+            small = r.get("small_object_score")
+            small_s = f"{small:.4f}" if small is not None else "—"
+            gflops = r.get("gflops")
+            gflops_s = f"{gflops:.6f}" if gflops is not None else "—"
+            e2e = r.get("e2e_mean_ms")
+            e2e_s = f"{e2e:.4f}" if e2e is not None else "—"
+            print(
+                f"  imgsz={r['imgsz']:>4}  mAP50-95={r['map50_95']:.4f}  "
+                f"small={small_s}  e2e={e2e_s} ms  GFLOPs={gflops_s}"
+            )
+
+    quant_rows = load_quantize_latency_rows(args.reports_dir, args.quantize_exps)
+    written.extend(plot_quantize_latency_boxplot(quant_rows, out))
+    quant_summary = []
+    for q in QUANT_ORDER:
+        subset = [r for r in quant_rows if r["quantize"] == q]
+        if not subset:
+            continue
+        vals = [r["e2e_ms"] for r in subset]
+        quant_summary.append(
+            {
+                "quantize": q,
+                "n": len(vals),
+                "mean_ms": sum(vals) / len(vals),
+                "p50_ms": sorted(vals)[len(vals) // 2],
+                "fps": subset[0].get("fps"),
+                "map50": subset[0].get("map50"),
+                "backend": subset[0].get("backend"),
+                "device": subset[0].get("device"),
+            }
+        )
+    quant_path = out / "quantize_latency_boxplot.json"
+    quant_path.write_text(
+        json.dumps({"summary": quant_summary, "n_samples": len(quant_rows)}, indent=2) + "\n"
+    )
+    print(f"Data: {quant_path}")
+    for s in quant_summary:
+        print(
+            f"  {s['quantize']:>4}  mean={s['mean_ms']:.4f} ms  "
+            f"p50={s['p50_ms']:.4f} ms  n={s['n']}  fps={s['fps']:.1f}"
+        )
 
     for p in written:
         print(f"Wrote {p}")
-    print(f"Data: {data_path}")
-    for r in rows:
-        small = r.get("small_object_score")
-        small_s = f"{small:.4f}" if small is not None else "—"
-        gflops = r.get("gflops")
-        gflops_s = f"{gflops:.6f}" if gflops is not None else "—"
-        e2e = r.get("e2e_mean_ms")
-        e2e_s = f"{e2e:.4f}" if e2e is not None else "—"
-        print(
-            f"  imgsz={r['imgsz']:>4}  mAP50-95={r['map50_95']:.4f}  "
-            f"small={small_s}  e2e={e2e_s} ms  GFLOPs={gflops_s}"
-        )
 
 
 if __name__ == "__main__":
