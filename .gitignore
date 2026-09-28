@@ -29,12 +29,16 @@ runs/
 # Demo weights: keep folder + manifest, ignore checkpoints
 weights/*.pt
 
-# Reports: keep markdown/json/meta; ignore media dumps
+# Reports: keep markdown/json/meta; ignore per-run media dumps
 reports/**/*.png
 reports/**/*.jpg
 reports/**/*.jpeg
 reports/**/*.pt
 reports/figures_raw/
+# Allow committed meta figures under compare/
+!reports/compare/*.png
+!reports/compare/*.html
+
 
 # Local previews / OS
 random_sample.png

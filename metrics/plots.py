@@ -1,12 +1,23 @@
-"""Plot epoch curves and final latency/accuracy figures."""
+"""Plot epoch curves and final latency/accuracy figures (seaborn PNG + plotly HTML)."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-import matplotlib.pyplot as plt
 import numpy as np
+import plotly.graph_objects as go
+import seaborn as sns
+
+from metrics.viz_style import (
+    PLOTLY_LAYOUT,
+    apply_theme,
+    finish_ax,
+    label_points,
+    new_fig,
+    palette,
+    save_fig,
+)
 
 
 def load_epochs(metrics_dir: Path) -> list:
@@ -20,6 +31,14 @@ def load_epochs(metrics_dir: Path) -> list:
     return rows
 
 
+def _write_plotly(fig: go.Figure, path: Path) -> Path:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.update_layout(**PLOTLY_LAYOUT)
+    fig.write_html(path, include_plotlyjs="cdn")
+    return path
+
+
 def plot_epochs(metrics_dir: Path) -> None:
     rows = load_epochs(metrics_dir)
     if not rows:
@@ -29,52 +48,75 @@ def plot_epochs(metrics_dir: Path) -> None:
     out = Path(metrics_dir) / "plots"
     out.mkdir(parents=True, exist_ok=True)
     epochs = [r["epoch"] for r in rows]
+    colors = palette()
 
-    # Accuracy
-    fig, ax = plt.subplots(figsize=(8, 4))
-    ax.plot(epochs, [r.get("map50_95") for r in rows], label="mAP50-95")
-    ax.plot(epochs, [r.get("precision") for r in rows], label="P")
-    ax.plot(epochs, [r.get("recall") for r in rows], label="R")
-    ax.plot(epochs, [r.get("f1") for r in rows], label="F1")
-    ax.set_xlabel("epoch")
-    ax.legend()
-    ax.set_title("Epoch detection metrics")
-    fig.tight_layout()
-    fig.savefig(out / "epoch_detection.png", dpi=150)
-    plt.close(fig)
+    # --- Detection metrics ---
+    series = {
+        "mAP50-95": [r.get("map50_95") for r in rows],
+        "P": [r.get("precision") for r in rows],
+        "R": [r.get("recall") for r in rows],
+        "F1": [r.get("f1") for r in rows],
+    }
+    fig, ax = new_fig()
+    for i, (name, ys) in enumerate(series.items()):
+        sns.lineplot(x=epochs, y=ys, ax=ax, marker="o", label=name, color=colors[i % len(colors)])
+    finish_ax(ax, title="Epoch detection metrics", xlabel="epoch", ylabel="score")
+    save_fig(fig, out / "epoch_detection.png")
 
-    # Losses
+    fig_p = go.Figure()
+    for name, ys in series.items():
+        fig_p.add_trace(go.Scatter(x=epochs, y=ys, mode="lines+markers", name=name))
+    fig_p.update_layout(title="Epoch detection metrics", xaxis_title="epoch", yaxis_title="score")
+    _write_plotly(fig_p, out / "epoch_detection.html")
+
+    # --- Losses ---
     loss_keys = sorted({k for r in rows for k in (r.get("loss") or {})})
     if loss_keys:
-        fig, ax = plt.subplots(figsize=(8, 4))
-        for k in loss_keys:
-            ax.plot(epochs, [((r.get("loss") or {}).get(k)) for r in rows], label=k)
-        ax.set_xlabel("epoch")
-        ax.legend()
-        ax.set_title("Epoch losses")
-        fig.tight_layout()
-        fig.savefig(out / "epoch_losses.png", dpi=150)
-        plt.close(fig)
+        fig, ax = new_fig()
+        for i, k in enumerate(loss_keys):
+            ys = [((r.get("loss") or {}).get(k)) for r in rows]
+            sns.lineplot(x=epochs, y=ys, ax=ax, marker="o", label=k, color=colors[i % len(colors)])
+        finish_ax(ax, title="Epoch losses", xlabel="epoch", ylabel="loss")
+        save_fig(fig, out / "epoch_losses.png")
 
-    # Grad % — skip epoch 1 (null / huge early jump wrecks the y-scale)
+        fig_p = go.Figure()
+        for k in loss_keys:
+            ys = [((r.get("loss") or {}).get(k)) for r in rows]
+            fig_p.add_trace(go.Scatter(x=epochs, y=ys, mode="lines+markers", name=k))
+        fig_p.update_layout(title="Epoch losses", xaxis_title="epoch", yaxis_title="loss")
+        _write_plotly(fig_p, out / "epoch_losses.html")
+
+    # --- Grad % from epoch 2 ---
     grad_rows = [r for r in rows if int(r.get("epoch", 0)) >= 2]
     grad_rows = [
         r for r in grad_rows
         if any((r.get("grad_pct") or {}).get(g) is not None for g in ("backbone", "neck", "head"))
     ]
     if grad_rows:
-        fig, ax = plt.subplots(figsize=(8, 4))
         xs = [r["epoch"] for r in grad_rows]
-        for g in ("backbone", "neck", "head"):
+        groups = ("backbone", "neck", "head")
+        fig, ax = new_fig()
+        for i, g in enumerate(groups):
             ys = [(r.get("grad_pct") or {}).get(g) for r in grad_rows]
-            ax.plot(xs, ys, label=g)
-        ax.set_xlabel("epoch")
-        ax.set_ylabel("% change vs previous epoch")
-        ax.legend()
-        ax.set_title("Gradient norm change by block (from epoch 2)")
-        fig.tight_layout()
-        fig.savefig(out / "epoch_grad_pct.png", dpi=150)
-        plt.close(fig)
+            sns.lineplot(x=xs, y=ys, ax=ax, marker="o", label=g, color=colors[i % len(colors)])
+        finish_ax(
+            ax,
+            title="Gradient norm change by block (from epoch 2)",
+            xlabel="epoch",
+            ylabel="% change vs previous epoch",
+        )
+        save_fig(fig, out / "epoch_grad_pct.png")
+
+        fig_p = go.Figure()
+        for g in groups:
+            ys = [(r.get("grad_pct") or {}).get(g) for r in grad_rows]
+            fig_p.add_trace(go.Scatter(x=xs, y=ys, mode="lines+markers", name=g))
+        fig_p.update_layout(
+            title="Gradient norm change by block (from epoch 2)",
+            xaxis_title="epoch",
+            yaxis_title="% change vs previous epoch",
+        )
+        _write_plotly(fig_p, out / "epoch_grad_pct.html")
 
 
 def plot_summary(metrics_dir: Path) -> None:
@@ -86,46 +128,71 @@ def plot_summary(metrics_dir: Path) -> None:
     summary = json.loads(summary_path.read_text())
     out = Path(metrics_dir) / "plots"
     out.mkdir(parents=True, exist_ok=True)
+    colors = palette()
 
-    # Latency distribution
+    # --- Latency distribution ---
     samples = (((summary.get("latency") or {}).get("e2e") or {}).get("samples_ms")) or []
     if samples:
         arr = np.asarray(samples, dtype=np.float64)
-        fig, ax = plt.subplots(figsize=(8, 4))
-        ax.hist(arr, bins=30, density=True, alpha=0.75, label="histogram")
+        fig, ax = new_fig()
+        sns.histplot(arr, bins=30, stat="density", ax=ax, color=colors[0], alpha=0.55, edgecolor="white", label="histogram")
         try:
-            from scipy.stats import gaussian_kde
-
-            xs = np.linspace(arr.min(), arr.max(), 200)
-            ax.plot(xs, gaussian_kde(arr)(xs), label="KDE")
+            sns.kdeplot(arr, ax=ax, color=colors[1], linewidth=2.2, label="KDE")
         except Exception:
             pass
-        ax.set_xlabel("e2e latency (ms)")
-        ax.set_ylabel("density")
-        ax.set_title("Latency distribution")
-        ax.legend()
-        fig.tight_layout()
-        fig.savefig(out / "latency_distribution.png", dpi=150)
-        plt.close(fig)
+        finish_ax(ax, title="Latency distribution", xlabel="e2e latency (ms)", ylabel="density")
+        save_fig(fig, out / "latency_distribution.png")
 
-    # Latency–accuracy curve
+        fig_p = go.Figure()
+        fig_p.add_trace(go.Histogram(x=arr, histnorm="probability density", name="histogram", opacity=0.65, nbinsx=30))
+        fig_p.update_layout(
+            title="Latency distribution",
+            xaxis_title="e2e latency (ms)",
+            yaxis_title="density",
+            barmode="overlay",
+        )
+        _write_plotly(fig_p, out / "latency_distribution.html")
+
+    # --- Latency–accuracy curve (annotate imgsz) ---
     curve = summary.get("latency_accuracy_curve") or []
     if curve:
-        fig, ax = plt.subplots(figsize=(8, 4))
+        # Sort by imgsz for a sensible path
+        curve = sorted(curve, key=lambda c: int(c.get("imgsz") or 0))
         xs = [c["e2e_mean_ms"] for c in curve]
         ys = [c["map50"] for c in curve]
-        ax.plot(xs, ys, marker="o")
-        for c in curve:
-            ax.annotate(str(c["imgsz"]), (c["e2e_mean_ms"], c["map50"]))
-        ax.set_xlabel("e2e latency (ms)")
-        ax.set_ylabel("mAP50")
-        ax.set_title("Latency–accuracy curve (imgsz sweep)")
-        fig.tight_layout()
-        fig.savefig(out / "latency_accuracy_curve.png", dpi=150)
-        plt.close(fig)
+        labels = [c["imgsz"] for c in curve]
+
+        fig, ax = new_fig()
+        sns.lineplot(x=xs, y=ys, ax=ax, color=colors[0], alpha=0.35, estimator=None, sort=False)
+        sns.scatterplot(x=xs, y=ys, ax=ax, s=120, color=colors[0], zorder=3, edgecolor="white", linewidth=1.2)
+        label_points(ax, xs, ys, labels)
+        finish_ax(
+            ax,
+            title="Latency–accuracy curve (imgsz sweep)",
+            xlabel="e2e latency (ms)",
+            ylabel="mAP50",
+        )
+        save_fig(fig, out / "latency_accuracy_curve.png")
+
+        fig_p = go.Figure(
+            go.Scatter(
+                x=xs, y=ys, mode="markers+text+lines",
+                text=[str(s) for s in labels], textposition="top right",
+                marker=dict(size=12),
+                hovertemplate="imgsz=%{text}<br>e2e=%{x:.3f} ms<br>mAP50=%{y:.4f}<extra></extra>",
+            )
+        )
+        fig_p.update_layout(
+            title="Latency–accuracy curve (imgsz sweep)",
+            xaxis_title="e2e latency (ms)",
+            yaxis_title="mAP50",
+            showlegend=False,
+        )
+        _write_plotly(fig_p, out / "latency_accuracy_curve.html")
 
 
 def plot_all(metrics_dir: str | Path) -> None:
+    apply_theme()
     metrics_dir = Path(metrics_dir)
     plot_epochs(metrics_dir)
     plot_summary(metrics_dir)

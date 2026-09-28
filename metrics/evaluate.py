@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import time
 from pathlib import Path
 
 import numpy as np
@@ -118,78 +117,176 @@ def small_object_score(model: YOLO, data_yaml: str, imgsz: int = 640, conf: floa
     return _f1(prec, rec)
 
 
-def measure_latency(model: YOLO, image_paths: list, imgsz: int = 640, warmup: int = 30) -> dict:
-    """Time full predict() as e2e; also try staged pre/infer/post when predictor allows."""
-    proc = psutil.Process()
-    e2e_ms, pre_ms, infer_ms, post_ms = [], [], [], []
-    peak_rss = proc.memory_info().rss
+def _iterative_sigma_clipping(
+    data: np.ndarray, sigma: float = 2.0, max_iters: int = 3
+) -> np.ndarray:
+    """Remove outliers the same way Ultralytics ProfileModels does."""
+    data = np.asarray(data, dtype=np.float64).ravel()
+    for _ in range(max_iters):
+        if data.size < 2:
+            break
+        mean, std = float(data.mean()), float(data.std())
+        if std <= 0:
+            break
+        clipped = data[(data >= mean - sigma * std) & (data <= mean + sigma * std)]
+        if clipped.size == data.size or clipped.size == 0:
+            break
+        data = clipped
+    return data
 
+
+def _pack_latency(xs) -> dict:
+    arr = np.asarray(xs, dtype=np.float64)
+    if arr.size == 0:
+        return {
+            "mean_ms": None,
+            "std_ms": None,
+            "p50_ms": None,
+            "p95_ms": None,
+            "samples_ms": [],
+        }
+    return {
+        "mean_ms": float(arr.mean()),
+        "std_ms": float(arr.std()),
+        "p50_ms": float(np.percentile(arr, 50)),
+        "p95_ms": float(np.percentile(arr, 95)),
+        "samples_ms": arr.tolist(),
+    }
+
+
+def _device_label() -> str:
+    if torch.cuda.is_available():
+        return f"cuda:{torch.cuda.get_device_name(0)}"
+    mps = getattr(torch.backends, "mps", None)
+    if mps is not None and mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+def _tensorrt_engine_path(weights: Path, imgsz: int, engine_dir: Path) -> Path:
+    engine_dir.mkdir(parents=True, exist_ok=True)
+    return engine_dir / f"{weights.stem}_imgsz{imgsz}.engine"
+
+
+def _export_tensorrt_fp16(weights: Path, imgsz: int, engine_path: Path) -> Path | None:
+    """Export TensorRT FP16 engine (Ultralytics detect-table style). Returns path or None."""
+    if not torch.cuda.is_available():
+        return None
+    if engine_path.is_file():
+        return engine_path
+    try:
+        model = YOLO(str(weights))
+        exported = model.export(
+            format="engine",
+            imgsz=imgsz,
+            half=True,
+            device=0,
+            simplify=True,
+            verbose=False,
+        )
+        src = Path(str(exported))
+        if not src.is_file():
+            return None
+        if src.resolve() != engine_path.resolve():
+            engine_path.write_bytes(src.read_bytes())
+            # Keep Ultralytics sidecar next to weights if present; prefer our cache path.
+        return engine_path if engine_path.is_file() else src
+    except Exception as exc:
+        print(f"TensorRT export failed ({exc}); falling back to PyTorch speed timing.")
+        return None
+
+
+def _profile_ultralytics_speed(
+    model: YOLO,
+    imgsz: int,
+    warmup: int = 10,
+    timed_runs: int = 100,
+) -> tuple[list[float], list[float], list[float]]:
+    """
+    Ultralytics T4 TensorRT10-style timing:
+    dummy uint8 input, batch=1, read results[0].speed stages, then sigma-clip later.
+    """
+    input_data = np.zeros((imgsz, imgsz, 3), dtype=np.uint8)
+    for _ in range(max(warmup, 1)):
+        model(input_data, imgsz=imgsz, verbose=False)
+
+    pre_ms, infer_ms, post_ms = [], [], []
+    for _ in range(max(timed_runs, 1)):
+        results = model(input_data, imgsz=imgsz, verbose=False)
+        speed = results[0].speed or {}
+        pre_ms.append(float(speed.get("preprocess") or 0.0))
+        infer_ms.append(float(speed.get("inference") or 0.0))
+        post_ms.append(float(speed.get("postprocess") or 0.0))
+    return pre_ms, infer_ms, post_ms
+
+
+def measure_latency(
+    model: YOLO,
+    imgsz: int = 640,
+    *,
+    weights: str | Path | None = None,
+    engine_dir: str | Path | None = None,
+    warmup: int = 10,
+    timed_runs: int = 100,
+    prefer_tensorrt: bool = True,
+) -> dict:
+    """
+    Latency à la Ultralytics detect Speed column:
+    - Prefer TensorRT FP16 engine on CUDA
+    - Else PyTorch model on the active device
+    - Dummy image, batch=1, warmup + timed runs
+    - Primary metric = results[0].speed['inference'] (pre/post excluded), sigma-clipped
+    - `e2e` is aliased to inference so existing reports/plots match the table metric
+    """
+    proc = psutil.Process()
+    peak_rss = proc.memory_info().rss
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats()
 
-    warm = image_paths[: min(warmup, len(image_paths))]
-    for p in warm:
-        model.predict(str(p), imgsz=imgsz, verbose=False)
+    weights_path = Path(weights).resolve() if weights is not None else None
+    backend = "pytorch"
+    engine_path = None
+    profile_model = model
 
-    for p in image_paths:
-        t0 = time.perf_counter()
-        model.predict(str(p), imgsz=imgsz, verbose=False)
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        e2e_ms.append((time.perf_counter() - t0) * 1000.000)
-        peak_rss = max(peak_rss, proc.memory_info().rss)
+    if prefer_tensorrt and weights_path is not None and weights_path.is_file():
+        cache = Path(engine_dir) if engine_dir is not None else weights_path.parent / "engines"
+        candidate = _tensorrt_engine_path(weights_path, imgsz, cache)
+        exported = _export_tensorrt_fp16(weights_path, imgsz, candidate)
+        if exported is not None and exported.is_file():
+            try:
+                profile_model = YOLO(str(exported))
+                backend = "tensorrt_fp16"
+                engine_path = str(exported)
+            except Exception as exc:
+                print(f"TensorRT load failed ({exc}); using PyTorch.")
+                profile_model = model
+                backend = "pytorch"
 
-        # Stage breakdown via predictor internals (best-effort)
-        predictor = getattr(model, "predictor", None)
-        if predictor is None:
-            continue
-        try:
-            import cv2
+    pre_raw, infer_raw, post_raw = _profile_ultralytics_speed(
+        profile_model, imgsz=imgsz, warmup=warmup, timed_runs=timed_runs
+    )
+    peak_rss = max(peak_rss, proc.memory_info().rss)
 
-            im0 = cv2.imread(str(p))
-            t1 = time.perf_counter()
-            im = predictor.preprocess([im0])
-            t2 = time.perf_counter()
-            with torch.no_grad():
-                preds = predictor.inference(im)
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()
-            t3 = time.perf_counter()
-            predictor.postprocess(preds, im, [im0])
-            t4 = time.perf_counter()
-            pre_ms.append((t2 - t1) * 1000.000)
-            infer_ms.append((t3 - t2) * 1000.000)
-            post_ms.append((t4 - t3) * 1000.000)
-        except Exception:
-            pass
-
-    def pack(xs):
-        arr = np.asarray(xs, dtype=np.float64)
-        if arr.size == 0:
-            return {
-                "mean_ms": None,
-                "std_ms": None,
-                "p50_ms": None,
-                "p95_ms": None,
-                "samples_ms": [],
-            }
-        return {
-            "mean_ms": float(arr.mean()),
-            "std_ms": float(arr.std()),
-            "p50_ms": float(np.percentile(arr, 50)),
-            "p95_ms": float(np.percentile(arr, 95)),
-            "samples_ms": arr.tolist(),
-        }
+    pre = _pack_latency(_iterative_sigma_clipping(np.asarray(pre_raw)))
+    infer = _pack_latency(_iterative_sigma_clipping(np.asarray(infer_raw)))
+    post = _pack_latency(_iterative_sigma_clipping(np.asarray(post_raw)))
+    # Headline latency = inference-only (Ultralytics T4 TensorRT10 column).
+    e2e = infer
 
     peak_vram_mb = None
     if torch.cuda.is_available():
         peak_vram_mb = torch.cuda.max_memory_allocated() / (1024 ** 2)
 
-    e2e = pack(e2e_ms)
     return {
-        "preprocess": pack(pre_ms),
-        "infer": pack(infer_ms),
-        "post": pack(post_ms),
+        "method": "ultralytics_speed_inference",
+        "backend": backend,
+        "device": _device_label(),
+        "engine_path": engine_path,
+        "warmup": warmup,
+        "timed_runs": timed_runs,
+        "preprocess": pre,
+        "infer": infer,
+        "post": post,
         "e2e": e2e,
         "fps": None if not e2e["mean_ms"] else float(1000.0 / e2e["mean_ms"]),
         "peak_rss_mb": peak_rss / (1024 ** 2),
@@ -213,13 +310,25 @@ def model_stats(model: YOLO, weights: Path, imgsz: int) -> dict:
     }
 
 
-def latency_accuracy_curve(model: YOLO, data_yaml: str, sizes=(320, 480, 640, 800)) -> list:
-    images = _list_images(data_yaml, "test")[:40]
+def latency_accuracy_curve(
+    model: YOLO,
+    data_yaml: str,
+    weights: Path,
+    engine_dir: Path,
+    sizes=(320, 480, 640, 800),
+) -> list:
     curve = []
     for s in sizes:
         val = model.val(data=data_yaml, split="test", imgsz=s, plots=False, verbose=False)
         m = _split_metrics(val)
-        lat = measure_latency(model, images, imgsz=s, warmup=5)
+        lat = measure_latency(
+            model,
+            imgsz=s,
+            weights=weights,
+            engine_dir=engine_dir,
+            warmup=10,
+            timed_runs=50,
+        )
         curve.append(
             {
                 "imgsz": s,
@@ -227,6 +336,7 @@ def latency_accuracy_curve(model: YOLO, data_yaml: str, sizes=(320, 480, 640, 80
                 "map50_95": m.get("map50_95"),
                 "e2e_mean_ms": lat["e2e"]["mean_ms"],
                 "fps": lat["fps"],
+                "backend": lat.get("backend"),
             }
         )
     return curve
@@ -237,12 +347,13 @@ def run(
     data_yaml: str | Path,
     out_dir: str | Path,
     imgsz: int = 640,
-    latency_n: int = 200,
+    latency_n: int = 100,
 ) -> dict:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     data_yaml = str(Path(data_yaml).resolve())
     weights = Path(weights).resolve()
+    engine_dir = out_dir / "engines"
 
     model = YOLO(str(weights))
 
@@ -255,9 +366,15 @@ def run(
     small = small_object_score(model, data_yaml, imgsz=imgsz)
 
     stats = model_stats(model, weights, imgsz)
-    images = _list_images(data_yaml, "test")[:latency_n]
-    latency = measure_latency(model, images, imgsz=imgsz)
-    curve = latency_accuracy_curve(model, data_yaml)
+    latency = measure_latency(
+        model,
+        imgsz=imgsz,
+        weights=weights,
+        engine_dir=engine_dir,
+        warmup=10,
+        timed_runs=latency_n,
+    )
+    curve = latency_accuracy_curve(model, data_yaml, weights=weights, engine_dir=engine_dir)
 
     map50 = float(test_m.get("map50") or 0.0)
     weight_mb = stats["weight_mb"]
@@ -269,15 +386,10 @@ def run(
     except ValueError:
         weights_str = str(weights)
 
-    try:
-        device = str(next(model.model.parameters()).device)
-    except Exception:
-        device = "unknown"
-
     summary = {
         "weights": weights_str,
         "imgsz": imgsz,
-        "device": device,
+        "device": latency.get("device") or _device_label(),
         "accuracy": {
             "map50": test_m.get("map50"),
             "map50_95": test_m.get("map50_95"),

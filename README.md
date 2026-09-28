@@ -31,7 +31,7 @@ After training, the script writes:
 |---|---|
 | `runs/<name>/metrics/` | Epoch log, summary, plots (local only) |
 | `reports/<name>/` | Per-run folder: report + plot/latency/epoch data (commit) |
-| `reports/compare/latency_accuracy.jsonl` | Shared index across runs for meta-plots |
+| `reports/compare/` | Shared index + meta plots (e.g. imgsz vs latency/GFLOPs) |
 | `weights/<name>_best_*.pt` + `latest.pt` | Demo checkpoints (gitignored) |
 | `weights/manifest.json` | Index of saved demo weights (committed) |
 

@@ -28,10 +28,17 @@ For each group `g ∈ {backbone, neck, head}`:
    - **neck**: layers in between
 
 ## Latency (final only)
-- batch = 1, warmup = 30, sample = 200 test images
-- Stages: preprocess / infer / post / e2e (ms)
+- Methodology matches Ultralytics detect **Speed (T4 TensorRT10)** column:
+  - Prefer **TensorRT FP16** engine on CUDA; else PyTorch on the active device
+  - Dummy `uint8` image, **batch = 1**, square `imgsz`
+  - Warmup **10**, timed runs **100** (curve uses 50)
+  - Read `results[0].speed` stages; primary metric = **`inference`** (pre/post excluded)
+  - Iterative σ-clipping (σ=2, max 3 iters) on samples
+- Stages still recorded: preprocess / infer / post; **`e2e` is aliased to infer**
 - Stats: mean, std, p50, p95 + full `samples_ms` list
-- FPS = `1000 / mean(e2e_ms)`
+- FPS = `1000 / mean(infer_ms)`
+- Metadata: `method`, `backend` (`tensorrt_fp16` | `pytorch`), `device`, optional `engine_path`
+- Engines cached under `runs/.../metrics/engines/`
 - Saved per run to `reports/<exp>/latency.json` (+ local `runs/.../metrics/`)
 - Cross-run index: `reports/compare/latency_accuracy.jsonl`
 

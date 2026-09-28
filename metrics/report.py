@@ -79,14 +79,18 @@ def build_report(
         f"| Train P / R / F1 | {_fmt(train.get('precision'))} / {_fmt(train.get('recall'))} / {_fmt(train.get('f1'))} |",
         f"| Small-object score | {_fmt(acc.get('small_object_score'))} |",
         "",
-        "## Latency (batch=1)",
+        "## Latency (Ultralytics inference-only, batch=1)",
+        "",
+        f"- Method: `{lat.get('method') or '—'}`",
+        f"- Backend: `{lat.get('backend') or '—'}`",
+        f"- Device: `{summary.get('device') or '—'}`",
         "",
         "| Stage | mean ms |",
         "|---|---|",
         f"| preprocess | {_fmt((lat.get('preprocess') or {}).get('mean_ms'), 4)} |",
-        f"| infer | {_fmt((lat.get('infer') or {}).get('mean_ms'), 4)} |",
+        f"| infer (primary) | {_fmt((lat.get('infer') or {}).get('mean_ms'), 4)} |",
         f"| post | {_fmt((lat.get('post') or {}).get('mean_ms'), 4)} |",
-        f"| e2e | {_fmt((lat.get('e2e') or {}).get('mean_ms'), 4)} |",
+        f"| e2e (= infer) | {_fmt((lat.get('e2e') or {}).get('mean_ms'), 4)} |",
         f"| FPS | {_fmt(lat.get('fps'), 4)} |",
         "",
         "## Model cost",
@@ -109,14 +113,15 @@ def build_report(
         "",
         "## Latency–accuracy curve",
         "",
-        "| imgsz | mAP50 | mAP50-95 | e2e ms | FPS |",
-        "|---|---|---|---|---|",
+        "| imgsz | mAP50 | mAP50-95 | infer ms | FPS | backend |",
+        "|---|---|---|---|---|---|",
     ]
 
     for row in summary.get("latency_accuracy_curve") or []:
         lines.append(
             f"| {row.get('imgsz')} | {_fmt(row.get('map50'))} | {_fmt(row.get('map50_95'))} "
-            f"| {_fmt(row.get('e2e_mean_ms'), 4)} | {_fmt(row.get('fps'), 4)} |"
+            f"| {_fmt(row.get('e2e_mean_ms'), 4)} | {_fmt(row.get('fps'), 4)} "
+            f"| {row.get('backend') or '—'} |"
         )
 
     lines += [

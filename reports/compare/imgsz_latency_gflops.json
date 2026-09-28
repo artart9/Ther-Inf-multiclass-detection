@@ -1,0 +1,100 @@
+{
+  "rows": [
+    {
+      "exp_name": "uav2uav_yolo26n_baseline_imgsz64",
+      "imgsz": 64,
+      "e2e_mean_ms": 16.480956229975163,
+      "e2e_p50_ms": 16.416349999872182,
+      "fps": 60.67609100139616,
+      "gflops": 0.057705472,
+      "map50": 0.5656392967629529,
+      "map50_95": 0.256259232911214,
+      "small_object_score": 0.058252427184466014,
+      "device": "cpu"
+    },
+    {
+      "exp_name": "uav2uav_yolo26n_baseline_imgsz96",
+      "imgsz": 96,
+      "e2e_mean_ms": 16.356324789992414,
+      "e2e_p50_ms": 16.42649900009019,
+      "fps": 61.13842888543324,
+      "gflops": 0.129871872,
+      "map50": 0.817573763316757,
+      "map50_95": 0.45433973741848466,
+      "small_object_score": 0.4,
+      "device": "cpu"
+    },
+    {
+      "exp_name": "uav2uav_yolo26n_baseline_imgsz128",
+      "imgsz": 128,
+      "e2e_mean_ms": 16.529360220001763,
+      "e2e_p50_ms": 16.61773700016056,
+      "fps": 60.4984092965634,
+      "gflops": 0.230969344,
+      "map50": 0.9149832144804624,
+      "map50_95": 0.5771313215966251,
+      "small_object_score": 0.6027397260273973,
+      "device": "cpu"
+    },
+    {
+      "exp_name": "uav2uav_yolo26n_baseline_imgsz160",
+      "imgsz": 160,
+      "e2e_mean_ms": 17.36095484505313,
+      "e2e_p50_ms": 17.3486679996131,
+      "fps": 57.60051845794313,
+      "gflops": 0.3610624,
+      "map50": 0.960932566630853,
+      "map50_95": 0.6506960226204825,
+      "small_object_score": 0.6584362139917695,
+      "device": "cpu"
+    },
+    {
+      "exp_name": "uav2uav_yolo26n_baseline_imgsz224",
+      "imgsz": 224,
+      "e2e_mean_ms": 17.30918081501386,
+      "e2e_p50_ms": 17.15512500004479,
+      "fps": 57.772809163366475,
+      "gflops": 0.708585472,
+      "map50": 0.9744795629246826,
+      "map50_95": 0.7357044058639521,
+      "small_object_score": 0.6827309236947791,
+      "device": "cpu"
+    },
+    {
+      "exp_name": "uav2uav_yolo26n_baseline_imgsz256",
+      "imgsz": 256,
+      "e2e_mean_ms": 17.150593970054615,
+      "e2e_p50_ms": 17.268346000491874,
+      "fps": 58.30701850594948,
+      "gflops": 0.926236672,
+      "map50": 0.9825948052658482,
+      "map50_95": 0.7635905579923912,
+      "small_object_score": 0.7520661157024794,
+      "device": "cpu"
+    },
+    {
+      "exp_name": "uav2uav_yolo26n_baseline_imgsz320",
+      "imgsz": 320,
+      "e2e_mean_ms": 17.284575874964503,
+      "e2e_p50_ms": 17.289460000029067,
+      "fps": 57.85504991467161,
+      "gflops": 1.4500096,
+      "map50": 0.9791348234965305,
+      "map50_95": 0.7870268876921971,
+      "small_object_score": 0.7280334728033473,
+      "device": "cpu"
+    },
+    {
+      "exp_name": "uav2uav_yolo26n_baseline_imgsz640",
+      "imgsz": 640,
+      "e2e_mean_ms": 17.40701418998924,
+      "e2e_p50_ms": 17.305275500120842,
+      "fps": 57.448106210834204,
+      "gflops": 5.8921984,
+      "map50": 0.9810123029586535,
+      "map50_95": 0.8204679328983288,
+      "small_object_score": 0.8161434977578476,
+      "device": "cpu"
+    }
+  ]
+}

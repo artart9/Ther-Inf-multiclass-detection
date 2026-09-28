@@ -108,6 +108,9 @@ def build_plot_data(summary: dict, epochs: list, exp_name: str) -> dict:
         },
         "accuracy": acc,
         "fps": lat.get("fps"),
+        "latency_method": lat.get("method"),
+        "latency_backend": lat.get("backend"),
+        "engine_path": lat.get("engine_path"),
         "efficiency": summary.get("efficiency") or {},
         "model": summary.get("model") or {},
     }
@@ -159,6 +162,9 @@ def save_run_plot_data(
         "platform": plot_data["platform"],
         "imgsz": plot_data["imgsz"],
         "weights": plot_data["weights"],
+        "method": plot_data.get("latency_method"),
+        "backend": plot_data.get("latency_backend"),
+        "engine_path": plot_data.get("engine_path"),
         "accuracy": {
             "map50": (plot_data.get("accuracy") or {}).get("map50"),
             "map50_95": (plot_data.get("accuracy") or {}).get("map50_95"),
@@ -180,6 +186,8 @@ def save_run_plot_data(
         "saved_utc": plot_data["saved_utc"],
         "device": plot_data["device"],
         "imgsz": plot_data["imgsz"],
+        "method": plot_data.get("latency_method"),
+        "backend": plot_data.get("latency_backend"),
         "map50": (plot_data.get("accuracy") or {}).get("map50"),
         "map50_95": (plot_data.get("accuracy") or {}).get("map50_95"),
         "e2e_mean_ms": e2e.get("mean_ms"),
