@@ -100,6 +100,7 @@ def build_plot_data(summary: dict, epochs: list, exp_name: str) -> dict:
         "platform": platform.platform(),
         "imgsz": summary.get("imgsz"),
         "weights": summary.get("weights"),
+        "quantize": summary.get("quantize") or lat.get("quantize"),
         "plots": {
             "epochs": epochs,
             "latency_e2e_samples_ms": stages["e2e"]["samples_ms"],
@@ -162,6 +163,7 @@ def save_run_plot_data(
         "platform": plot_data["platform"],
         "imgsz": plot_data["imgsz"],
         "weights": plot_data["weights"],
+        "quantize": plot_data.get("quantize"),
         "method": plot_data.get("latency_method"),
         "backend": plot_data.get("latency_backend"),
         "engine_path": plot_data.get("engine_path"),
@@ -188,6 +190,7 @@ def save_run_plot_data(
         "imgsz": plot_data["imgsz"],
         "method": plot_data.get("latency_method"),
         "backend": plot_data.get("latency_backend"),
+        "quantize": plot_data.get("quantize"),
         "map50": (plot_data.get("accuracy") or {}).get("map50"),
         "map50_95": (plot_data.get("accuracy") or {}).get("map50_95"),
         "e2e_mean_ms": e2e.get("mean_ms"),

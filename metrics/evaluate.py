@@ -163,36 +163,56 @@ def _device_label() -> str:
     return "cpu"
 
 
-def _tensorrt_engine_path(weights: Path, imgsz: int, engine_dir: Path) -> Path:
+def _tensorrt_engine_path(
+    weights: Path, imgsz: int, engine_dir: Path, quantize: str
+) -> Path:
     engine_dir.mkdir(parents=True, exist_ok=True)
-    return engine_dir / f"{weights.stem}_imgsz{imgsz}.engine"
+    return engine_dir / f"{weights.stem}_imgsz{imgsz}_{quantize}.engine"
 
 
-def _export_tensorrt_fp16(weights: Path, imgsz: int, engine_path: Path) -> Path | None:
-    """Export TensorRT FP16 engine (Ultralytics detect-table style). Returns path or None."""
+def _export_tensorrt(
+    weights: Path,
+    imgsz: int,
+    engine_path: Path,
+    quantize: str,
+    data_yaml: str | None = None,
+) -> Path | None:
+    """Export TensorRT engine at fp32 / fp16 / int8. Returns path or None."""
     if not torch.cuda.is_available():
         return None
     if engine_path.is_file():
         return engine_path
     try:
         model = YOLO(str(weights))
-        exported = model.export(
+        export_kw: dict = dict(
             format="engine",
             imgsz=imgsz,
-            half=True,
             device=0,
             simplify=True,
             verbose=False,
         )
+        if quantize == "fp16":
+            export_kw["half"] = True
+            export_kw["int8"] = False
+        elif quantize == "int8":
+            export_kw["half"] = False
+            export_kw["int8"] = True
+            if data_yaml is None:
+                raise ValueError("INT8 TensorRT export requires data_yaml for calibration")
+            export_kw["data"] = data_yaml
+        else:  # fp32
+            export_kw["half"] = False
+            export_kw["int8"] = False
+
+        exported = model.export(**export_kw)
         src = Path(str(exported))
         if not src.is_file():
             return None
         if src.resolve() != engine_path.resolve():
             engine_path.write_bytes(src.read_bytes())
-            # Keep Ultralytics sidecar next to weights if present; prefer our cache path.
         return engine_path if engine_path.is_file() else src
     except Exception as exc:
-        print(f"TensorRT export failed ({exc}); falling back to PyTorch speed timing.")
+        print(f"TensorRT export ({quantize}) failed ({exc}); falling back to PyTorch speed timing.")
         return None
 
 
@@ -226,36 +246,49 @@ def measure_latency(
     *,
     weights: str | Path | None = None,
     engine_dir: str | Path | None = None,
+    data_yaml: str | Path | None = None,
+    quantize: str = "fp16",
     warmup: int = 10,
     timed_runs: int = 100,
     prefer_tensorrt: bool = True,
 ) -> dict:
     """
     Latency à la Ultralytics detect Speed column:
-    - Prefer TensorRT FP16 engine on CUDA
+    - Prefer TensorRT engine on CUDA at requested quantize (fp32|fp16|int8)
     - Else PyTorch model on the active device
     - Dummy image, batch=1, warmup + timed runs
     - Primary metric = results[0].speed['inference'] (pre/post excluded), sigma-clipped
     - `e2e` is aliased to inference so existing reports/plots match the table metric
     """
+    quantize = str(quantize).lower().strip()
+    if quantize not in {"fp32", "fp16", "int8"}:
+        raise ValueError(f"quantize must be fp32|fp16|int8, got {quantize!r}")
+
     proc = psutil.Process()
     peak_rss = proc.memory_info().rss
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats()
 
     weights_path = Path(weights).resolve() if weights is not None else None
+    data_yaml_str = str(Path(data_yaml).resolve()) if data_yaml is not None else None
     backend = "pytorch"
     engine_path = None
     profile_model = model
 
     if prefer_tensorrt and weights_path is not None and weights_path.is_file():
         cache = Path(engine_dir) if engine_dir is not None else weights_path.parent / "engines"
-        candidate = _tensorrt_engine_path(weights_path, imgsz, cache)
-        exported = _export_tensorrt_fp16(weights_path, imgsz, candidate)
+        candidate = _tensorrt_engine_path(weights_path, imgsz, cache, quantize)
+        exported = _export_tensorrt(
+            weights_path,
+            imgsz,
+            candidate,
+            quantize=quantize,
+            data_yaml=data_yaml_str,
+        )
         if exported is not None and exported.is_file():
             try:
                 profile_model = YOLO(str(exported))
-                backend = "tensorrt_fp16"
+                backend = f"tensorrt_{quantize}"
                 engine_path = str(exported)
             except Exception as exc:
                 print(f"TensorRT load failed ({exc}); using PyTorch.")
@@ -279,6 +312,7 @@ def measure_latency(
 
     return {
         "method": "ultralytics_speed_inference",
+        "quantize": quantize,
         "backend": backend,
         "device": _device_label(),
         "engine_path": engine_path,
@@ -315,6 +349,7 @@ def latency_accuracy_curve(
     data_yaml: str,
     weights: Path,
     engine_dir: Path,
+    quantize: str = "fp16",
     sizes=(320, 480, 640, 800),
 ) -> list:
     curve = []
@@ -326,6 +361,8 @@ def latency_accuracy_curve(
             imgsz=s,
             weights=weights,
             engine_dir=engine_dir,
+            data_yaml=data_yaml,
+            quantize=quantize,
             warmup=10,
             timed_runs=50,
         )
@@ -337,6 +374,7 @@ def latency_accuracy_curve(
                 "e2e_mean_ms": lat["e2e"]["mean_ms"],
                 "fps": lat["fps"],
                 "backend": lat.get("backend"),
+                "quantize": lat.get("quantize"),
             }
         )
     return curve
@@ -348,12 +386,14 @@ def run(
     out_dir: str | Path,
     imgsz: int = 640,
     latency_n: int = 100,
+    quantize: str = "fp16",
 ) -> dict:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     data_yaml = str(Path(data_yaml).resolve())
     weights = Path(weights).resolve()
     engine_dir = out_dir / "engines"
+    quantize = str(quantize).lower().strip()
 
     model = YOLO(str(weights))
 
@@ -371,10 +411,18 @@ def run(
         imgsz=imgsz,
         weights=weights,
         engine_dir=engine_dir,
+        data_yaml=data_yaml,
+        quantize=quantize,
         warmup=10,
         timed_runs=latency_n,
     )
-    curve = latency_accuracy_curve(model, data_yaml, weights=weights, engine_dir=engine_dir)
+    curve = latency_accuracy_curve(
+        model,
+        data_yaml,
+        weights=weights,
+        engine_dir=engine_dir,
+        quantize=quantize,
+    )
 
     map50 = float(test_m.get("map50") or 0.0)
     weight_mb = stats["weight_mb"]
@@ -389,6 +437,7 @@ def run(
     summary = {
         "weights": weights_str,
         "imgsz": imgsz,
+        "quantize": quantize,
         "device": latency.get("device") or _device_label(),
         "accuracy": {
             "map50": test_m.get("map50"),

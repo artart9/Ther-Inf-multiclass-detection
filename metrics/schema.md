@@ -29,7 +29,7 @@ For each group `g ∈ {backbone, neck, head}`:
 
 ## Latency (final only)
 - Methodology matches Ultralytics detect **Speed (T4 TensorRT10)** column:
-  - Prefer **TensorRT FP16** engine on CUDA; else PyTorch on the active device
+  - Prefer **TensorRT** engine on CUDA at requested precision (`fp32` | `fp16` | `int8`); else PyTorch
   - Dummy `uint8` image, **batch = 1**, square `imgsz`
   - Warmup **10**, timed runs **100** (curve uses 50)
   - Read `results[0].speed` stages; primary metric = **`inference`** (pre/post excluded)
@@ -37,8 +37,9 @@ For each group `g ∈ {backbone, neck, head}`:
 - Stages still recorded: preprocess / infer / post; **`e2e` is aliased to infer**
 - Stats: mean, std, p50, p95 + full `samples_ms` list
 - FPS = `1000 / mean(infer_ms)`
-- Metadata: `method`, `backend` (`tensorrt_fp16` | `pytorch`), `device`, optional `engine_path`
-- Engines cached under `runs/.../metrics/engines/`
+- Metadata: `method`, `quantize`, `backend` (`tensorrt_fp16` | `tensorrt_int8` | `pytorch`), `device`, optional `engine_path`
+- Engines cached under `runs/.../metrics/engines/*_{quantize}.engine`
+- CLI: `python models/baseline.py --quantize fp16|int8|fp32` (default `fp16`; training stays float)
 - Saved per run to `reports/<exp>/latency.json` (+ local `runs/.../metrics/`)
 - Cross-run index: `reports/compare/latency_accuracy.jsonl`
 

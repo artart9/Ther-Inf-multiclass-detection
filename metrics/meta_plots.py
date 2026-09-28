@@ -218,63 +218,73 @@ def plot_map_vs_latency_gflops(rows: list[dict], out_dir: Path) -> list[Path]:
     return written
 
 
-def plot_small_object_vs_imgsz(
+def plot_small_object_vs_gflops(
     rows: list[dict],
     out_dir: Path,
-    title: str = "Small-object score vs imgsz",
+    title: str = "Small-object score vs compute (labeled by imgsz)",
 ) -> list[Path]:
-    """Line plot of small-object F1 vs training/eval imgsz."""
+    """Scatter/line of small-object F1 vs GFLOPs; points labeled by imgsz."""
     apply_theme()
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     colors = palette()
 
-    xs = [r["imgsz"] for r in rows]
-    ys = [r["small_object_score"] for r in rows]
-    if any(v is None for v in ys):
-        missing = [r["imgsz"] for r in rows if r["small_object_score"] is None]
-        raise ValueError(f"Missing small_object_score for imgsz={missing}")
+    usable = [
+        r
+        for r in rows
+        if r.get("small_object_score") is not None
+        and r.get("gflops") is not None
+        and float(r["gflops"]) > 0
+    ]
+    if not usable:
+        raise ValueError("No rows with both small_object_score and positive gflops")
 
+    xs = [float(r["gflops"]) for r in usable]
+    ys = [float(r["small_object_score"]) for r in usable]
+    labels = [r["imgsz"] for r in usable]
+    color = colors[2 % len(colors)]
     written: list[Path] = []
 
     fig, ax = new_fig(FIGSIZE)
-    sns.lineplot(x=xs, y=ys, marker="o", ax=ax, color=colors[2 % len(colors)])
-    label_points(ax, xs, ys, xs)
-    finish_ax(
-        ax,
-        title=title,
-        xlabel="imgsz (px)",
-        ylabel="Small-object score (F1)",
-    )
-    ax.set_xticks(xs)
+    sns.lineplot(x=xs, y=ys, ax=ax, color=color, alpha=0.35, estimator=None, sort=False)
+    sns.scatterplot(x=xs, y=ys, ax=ax, s=130, color=color, zorder=3, edgecolor="white", linewidth=1.2)
+    label_points(ax, xs, ys, labels)
+    finish_ax(ax, title=title, xlabel="GFLOPs", ylabel="Small-object score (F1)")
     ax.set_ylim(0.0, 1.05)
-    written.append(save_fig(fig, out_dir / "small_object_vs_imgsz.png"))
+    written.append(save_fig(fig, out_dir / "small_object_vs_gflops.png"))
 
     fig_p = go.Figure(
         data=[
             go.Scatter(
                 x=xs,
                 y=ys,
-                mode="lines+markers+text",
-                text=[str(s) for s in xs],
-                textposition="top center",
+                mode="markers+text+lines",
+                text=[str(s) for s in labels],
+                textposition="top right",
                 marker=dict(size=12),
                 name="small-object F1",
-                hovertemplate="imgsz=%{x}<br>small-object F1=%{y:.4f}<extra></extra>",
+                hovertemplate="imgsz=%{text}<br>GFLOPs=%{x:.4f}<br>small-object F1=%{y:.4f}<extra></extra>",
             )
         ]
     )
     fig_p.update_layout(**PLOTLY_LAYOUT, title=title)
-    fig_p.update_xaxes(title_text="imgsz (px)", tickvals=xs)
+    fig_p.update_xaxes(title_text="GFLOPs")
     fig_p.update_yaxes(title_text="Small-object score (F1)", range=[0, 1.05])
-    html = out_dir / "small_object_vs_imgsz.html"
+    html = out_dir / "small_object_vs_gflops.html"
     fig_p.write_html(html, include_plotlyjs="cdn")
     written.append(html)
+
+    # Remove superseded imgsz-axis plot if present.
+    for old in ("small_object_vs_imgsz.png", "small_object_vs_imgsz.html"):
+        stale = out_dir / old
+        if stale.exists():
+            stale.unlink()
+
     return written
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Meta-plot latency, GFLOPs, and small-object vs imgsz")
+    p = argparse.ArgumentParser(description="Meta-plot latency, GFLOPs, and small-object vs compute")
     p.add_argument("--reports-dir", type=Path, default=ROOT / "reports")
     p.add_argument("--out-dir", type=Path, default=ROOT / "reports" / "compare")
     p.add_argument("--imgsz", type=int, nargs="+", default=list(DEFAULT_IMGSZ))
@@ -291,7 +301,7 @@ def main() -> None:
     written = []
     written.extend(plot_latency_gflops_vs_imgsz(rows, out))
     written.extend(plot_map_vs_latency_gflops(rows, out))
-    written.extend(plot_small_object_vs_imgsz(rows, out))
+    written.extend(plot_small_object_vs_gflops(rows, out))
     data_path = out / "imgsz_latency_gflops.json"
     data_path.write_text(json.dumps({"rows": rows}, indent=2) + "\n")
 

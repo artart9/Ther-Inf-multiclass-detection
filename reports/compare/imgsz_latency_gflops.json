@@ -61,6 +61,18 @@
       "device": "cpu"
     },
     {
+      "exp_name": "uav2uav_yolo26n_baseline_imgsz240",
+      "imgsz": 240,
+      "e2e_mean_ms": 17.37870160498005,
+      "e2e_p50_ms": 17.411790499863855,
+      "fps": 57.54169803533766,
+      "gflops": 0.0,
+      "map50": 0.964566253735297,
+      "map50_95": 0.706799818931842,
+      "small_object_score": 0.7154471544715447,
+      "device": "cpu"
+    },
+    {
       "exp_name": "uav2uav_yolo26n_baseline_imgsz256",
       "imgsz": 256,
       "e2e_mean_ms": 17.150593970054615,

@@ -19,11 +19,11 @@ git clone https://github.com/GabryV00/ThermalUAV2UAV_Dataset.git data/ThermalUAV
 ## Train
 
 ```bash
-python models/baseline.py                          # defaults: 50 epochs, imgsz 640, batch 16
-python models/baseline.py --epochs 20 --imgsz 640 --batch 16 --name uav2uav_yolo26n_baseline
+python models/baseline.py                          # defaults: 50 epochs, imgsz 640, batch 16, quantize fp16
+python models/baseline.py --epochs 20 --imgsz 640 --batch 16 --quantize int8 --name uav2uav_yolo26n_baseline_int8
 ```
 
-Use a **different `--name`** for each experiment so reports stay side-by-side.
+`--quantize` selects TensorRT latency export precision only (`fp32` | `fp16` | `int8`); training stays float. Use a **different `--name`** for each experiment so reports stay side-by-side.
 
 After training, the script writes:
 

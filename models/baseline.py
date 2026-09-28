@@ -28,6 +28,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--epochs", type=int, default=50)
     p.add_argument("--imgsz", type=int, default=640)
     p.add_argument("--batch", type=int, default=16)
+    p.add_argument(
+        "--quantize",
+        choices=("fp32", "fp16", "int8"),
+        default="fp16",
+        help="TensorRT latency export precision (training stays float; default: fp16)",
+    )
     p.add_argument("--name", default=DEFAULT_RUN_NAME, help="run / experiment name")
     p.add_argument("--model", default="yolo26n.pt", help="pretrained weights or model name")
     p.add_argument("--device", default=None, help="cuda, cpu, mps, or device id")
@@ -71,7 +77,11 @@ def main() -> None:
 
     print("Running final evaluation...")
     summary = evaluate_run(
-        weights=best, data_yaml=DATA_YAML, out_dir=metrics_dir, imgsz=args.imgsz
+        weights=best,
+        data_yaml=DATA_YAML,
+        out_dir=metrics_dir,
+        imgsz=args.imgsz,
+        quantize=args.quantize,
     )
     plot_all(metrics_dir)
 
@@ -87,7 +97,8 @@ def main() -> None:
         reports_dir=ROOT / "reports",
         exp_name=args.name,
         notes=f"YOLO26n baseline on ThermalUAV2UAV "
-        f"(epochs={args.epochs}, imgsz={args.imgsz}, batch={args.batch}).",
+        f"(epochs={args.epochs}, imgsz={args.imgsz}, batch={args.batch}, "
+        f"quantize={args.quantize}).",
     )
 
     demo = save_demo_weights(
