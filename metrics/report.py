@@ -64,7 +64,11 @@ def build_report(
         "",
         f"- Generated (UTC): `{datetime.now(timezone.utc).isoformat()}`",
         f"- Weights: `{weights}`",
-        f"- imgsz: `{summary.get('imgsz', '—')}`",
+        (
+            f"- imgsz: `{summary.get('imgsz', '—')}` (requested `{summary.get('imgsz_requested')}`)"
+            if summary.get("imgsz_requested") not in (None, summary.get("imgsz"))
+            else f"- imgsz: `{summary.get('imgsz', '—')}`"
+        ),
         f"- quantize: `{summary.get('quantize') or (lat.get('quantize') or '—')}`",
         "",
         "## Notes",
@@ -86,6 +90,11 @@ def build_report(
         f"- Quantize: `{lat.get('quantize') or summary.get('quantize') or '—'}`",
         f"- Backend: `{lat.get('backend') or '—'}`",
         f"- Device: `{summary.get('device') or '—'}`",
+        (
+            f"- Timed imgsz: `{lat.get('imgsz')}` (requested `{lat.get('imgsz_requested')}`)"
+            if lat.get("imgsz_requested") not in (None, lat.get("imgsz"))
+            else f"- Timed imgsz: `{lat.get('imgsz') or summary.get('imgsz') or '—'}`"
+        ),
         "",
         "| Stage | mean ms |",
         "|---|---|",

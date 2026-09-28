@@ -163,6 +163,31 @@ def _device_label() -> str:
     return "cpu"
 
 
+def _max_stride(model: YOLO) -> int:
+    """Largest detection stride (SPD factor>2 raises this above 32)."""
+    m = model.model if hasattr(model, "model") else model
+    if hasattr(m, "stride"):
+        return max(int(m.stride.max()), 1)
+    return 32
+
+
+def _align_imgsz(imgsz: int, stride: int) -> int:
+    """Round imgsz up to a multiple of stride (matches Ultralytics predict/val)."""
+    stride = max(int(stride), 1)
+    imgsz = int(imgsz)
+    return imgsz if imgsz % stride == 0 else imgsz + stride - (imgsz % stride)
+
+
+def _ensure_custom_modules() -> None:
+    """Register project custom layers (SPDConv) before YOLO(weights) / export."""
+    try:
+        from models.spd import register_spd
+
+        register_spd()
+    except Exception:
+        pass
+
+
 def _tensorrt_engine_path(
     weights: Path, imgsz: int, engine_dir: Path, quantize: str
 ) -> Path:
@@ -183,6 +208,7 @@ def _export_tensorrt(
     if engine_path.is_file():
         return engine_path
     try:
+        _ensure_custom_modules()
         model = YOLO(str(weights))
         export_kw: dict = dict(
             format="engine",
@@ -264,6 +290,15 @@ def measure_latency(
     if quantize not in {"fp32", "fp16", "int8"}:
         raise ValueError(f"quantize must be fp32|fp16|int8, got {quantize!r}")
 
+    imgsz_requested = int(imgsz)
+    stride = _max_stride(model)
+    imgsz = _align_imgsz(imgsz_requested, stride)
+    if imgsz != imgsz_requested:
+        print(
+            f"Latency imgsz {imgsz_requested} -> {imgsz} "
+            f"(aligned to max stride {stride})"
+        )
+
     proc = psutil.Process()
     peak_rss = proc.memory_info().rss
     if torch.cuda.is_available():
@@ -287,6 +322,7 @@ def measure_latency(
         )
         if exported is not None and exported.is_file():
             try:
+                _ensure_custom_modules()
                 profile_model = YOLO(str(exported))
                 backend = f"tensorrt_{quantize}"
                 engine_path = str(exported)
@@ -316,6 +352,9 @@ def measure_latency(
         "backend": backend,
         "device": _device_label(),
         "engine_path": engine_path,
+        "imgsz_requested": imgsz_requested,
+        "imgsz": imgsz,
+        "max_stride": stride,
         "warmup": warmup,
         "timed_runs": timed_runs,
         "preprocess": pre,
@@ -328,15 +367,43 @@ def measure_latency(
     }
 
 
+def _get_flops(model: torch.nn.Module, imgsz: int) -> float | None:
+    """GFLOPs for imgsz. Uses yaml input channels (not first-weight in_ch).
+
+    Ultralytics ``get_flops`` infers channels from ``next(parameters()).shape[1]``,
+    which breaks SPD/Focus stems whose first conv sees ``C * factor**2`` channels.
+    """
+    try:
+        import thop
+        from ultralytics.nn.modules.block import AAttn, Attention
+        from ultralytics.nn.modules.head import RTDETRDecoder
+        from ultralytics.utils.torch_utils import _attention_ops, unwrap_model
+    except ImportError:
+        return None
+
+    try:
+        model = unwrap_model(model)
+        p = next(model.parameters())
+        size = [imgsz, imgsz] if not isinstance(imgsz, list) else imgsz
+        yaml_cfg = getattr(model, "yaml", None) or {}
+        ch = int(yaml_cfg.get("channels", yaml_cfg.get("ch", 3)) or 3)
+        attn = tuple(m for m in model.modules() if isinstance(m, (Attention, AAttn)))
+        rtdetr = any(isinstance(m, RTDETRDecoder) for m in model.modules())
+        stride = None if attn else (max(int(model.stride.max()), 32) if hasattr(model, "stride") else 32)
+        im = torch.empty((1, ch, *size), device=p.device, dtype=p.dtype)
+        custom_ops = {Attention: _attention_ops, AAttn: _attention_ops} if attn else None
+        if rtdetr:
+            flops = thop.profile(model, inputs=[im], custom_ops=custom_ops, verbose=False)[0]
+        else:
+            flops = thop.profile(model, inputs=[im], stride=stride, custom_ops=custom_ops, verbose=False)[0]
+        return float(flops) / 1e9 * 2
+    except Exception:
+        return None
+
+
 def model_stats(model: YOLO, weights: Path, imgsz: int) -> dict:
     params = sum(p.numel() for p in model.model.parameters())
-    gflops = None
-    try:
-        from ultralytics.utils.torch_utils import get_flops
-
-        gflops = float(get_flops(model.model, imgsz=imgsz))
-    except Exception:
-        pass
+    gflops = _get_flops(model.model, imgsz=imgsz)
     return {
         "params": int(params),
         "gflops": gflops,
@@ -352,8 +419,18 @@ def latency_accuracy_curve(
     quantize: str = "fp16",
     sizes=(320, 480, 640, 800),
 ) -> list:
-    curve = []
+    stride = _max_stride(model)
+    # Align each size; drop duplicates after alignment (e.g. 480 and 512 both -> 512).
+    aligned = []
+    seen = set()
     for s in sizes:
+        a = _align_imgsz(int(s), stride)
+        if a not in seen:
+            seen.add(a)
+            aligned.append(a)
+
+    curve = []
+    for s in aligned:
         val = model.val(data=data_yaml, split="test", imgsz=s, plots=False, verbose=False)
         m = _split_metrics(val)
         lat = measure_latency(
@@ -368,7 +445,8 @@ def latency_accuracy_curve(
         )
         curve.append(
             {
-                "imgsz": s,
+                "imgsz": lat.get("imgsz", s),
+                "imgsz_requested": lat.get("imgsz_requested", s),
                 "map50": m.get("map50"),
                 "map50_95": m.get("map50_95"),
                 "e2e_mean_ms": lat["e2e"]["mean_ms"],
@@ -395,7 +473,16 @@ def run(
     engine_dir = out_dir / "engines"
     quantize = str(quantize).lower().strip()
 
+    _ensure_custom_modules()
     model = YOLO(str(weights))
+
+    imgsz_requested = int(imgsz)
+    imgsz = _align_imgsz(imgsz_requested, _max_stride(model))
+    if imgsz != imgsz_requested:
+        print(
+            f"Eval imgsz {imgsz_requested} -> {imgsz} "
+            f"(aligned to max stride {_max_stride(model)})"
+        )
 
     test_m = _split_metrics(
         model.val(data=data_yaml, split="test", imgsz=imgsz, plots=False, verbose=False)
@@ -437,6 +524,7 @@ def run(
     summary = {
         "weights": weights_str,
         "imgsz": imgsz,
+        "imgsz_requested": imgsz_requested,
         "quantize": quantize,
         "device": latency.get("device") or _device_label(),
         "accuracy": {
