@@ -375,29 +375,71 @@ def _get_flops(model: torch.nn.Module, imgsz: int) -> float | None:
     """
     try:
         import thop
+    except ImportError:
+        try:
+            import ultralytics.thop as thop  # older / alternate package layout
+        except ImportError:
+            print("GFLOPs skipped: install ultralytics-thop (pip install ultralytics-thop)")
+            return None
+
+    try:
         from ultralytics.nn.modules.block import AAttn, Attention
         from ultralytics.nn.modules.head import RTDETRDecoder
-        from ultralytics.utils.torch_utils import _attention_ops, unwrap_model
-    except ImportError:
+        from ultralytics.utils.torch_utils import unwrap_model
+    except ImportError as exc:
+        print(f"GFLOPs skipped: ultralytics import failed ({exc})")
         return None
+
+    try:
+        from ultralytics.utils.torch_utils import _attention_ops
+    except ImportError:
+        _attention_ops = None
 
     try:
         model = unwrap_model(model)
         p = next(model.parameters())
-        size = [imgsz, imgsz] if not isinstance(imgsz, list) else imgsz
-        yaml_cfg = getattr(model, "yaml", None) or {}
+        size = [imgsz, imgsz] if not isinstance(imgsz, list) else list(imgsz)
+        yaml_cfg = getattr(model, "yaml", None)
+        if not isinstance(yaml_cfg, dict):
+            yaml_cfg = {}
         ch = int(yaml_cfg.get("channels", yaml_cfg.get("ch", 3)) or 3)
+        # Never trust first-weight in_channels (SPD stem is C * factor**2).
+        if ch < 1:
+            ch = 3
+
         attn = tuple(m for m in model.modules() if isinstance(m, (Attention, AAttn)))
         rtdetr = any(isinstance(m, RTDETRDecoder) for m in model.modules())
         stride = None if attn else (max(int(model.stride.max()), 32) if hasattr(model, "stride") else 32)
         im = torch.empty((1, ch, *size), device=p.device, dtype=p.dtype)
-        custom_ops = {Attention: _attention_ops, AAttn: _attention_ops} if attn else None
-        if rtdetr:
-            flops = thop.profile(model, inputs=[im], custom_ops=custom_ops, verbose=False)[0]
-        else:
-            flops = thop.profile(model, inputs=[im], stride=stride, custom_ops=custom_ops, verbose=False)[0]
-        return float(flops) / 1e9 * 2
-    except Exception:
+        custom_ops = (
+            {Attention: _attention_ops, AAttn: _attention_ops}
+            if (attn and _attention_ops is not None)
+            else None
+        )
+
+        def _profile(ops, use_stride):
+            if rtdetr or not use_stride:
+                return thop.profile(model, inputs=[im], custom_ops=ops, verbose=False)[0]
+            return thop.profile(model, inputs=[im], stride=stride, custom_ops=ops, verbose=False)[0]
+
+        # Prefer attention-aware count; fall back if hooks break on custom stems.
+        last_err = None
+        for ops, use_stride in (
+            (custom_ops, True),
+            (custom_ops, False),
+            (None, True),
+            (None, False),
+        ):
+            try:
+                flops = _profile(ops, use_stride)
+                return float(flops) / 1e9 * 2
+            except Exception as exc:
+                last_err = exc
+                continue
+        print(f"GFLOPs profiling failed ({last_err})")
+        return None
+    except Exception as exc:
+        print(f"GFLOPs skipped ({exc})")
         return None
 
 
