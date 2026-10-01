@@ -70,11 +70,15 @@ def build_report(
             else f"- imgsz: `{summary.get('imgsz', '—')}`"
         ),
         f"- quantize: `{summary.get('quantize') or (lat.get('quantize') or '—')}`",
+        f"- eval backend: `{summary.get('backend') or lat.get('backend') or '—'}`",
         "",
         "## Notes",
         notes.strip() or "_Add setup notes (hardware, hypothesis, changes) here._",
         "",
         "## Final accuracy",
+        "",
+        f"_Measured on deploy backend `{acc.get('backend') or summary.get('backend') or '—'}` "
+        f"(quantize `{acc.get('quantize') or summary.get('quantize') or '—'}`)._",
         "",
         "| Metric | Value |",
         "|---|---|",

@@ -21,6 +21,8 @@ git clone https://github.com/GabryV00/ThermalUAV2UAV_Dataset.git data/ThermalUAV
 ```bash
 python models/baseline.py                          # defaults: 50 epochs, imgsz 640, batch 16, quantize fp16
 python models/baseline.py --epochs 20 --imgsz 640 --batch 16 --quantize int8 --name uav2uav_yolo26n_baseline_int8
+python models/spd.py --factor 2 --imgsz 160          # SPD stem only
+python models/spd_full.py --imgsz 320 --batch 64   # all stride-2 Convs -> SPD-Conv (factor=2)
 ```
 
 `--quantize` selects TensorRT latency export precision only (`fp32` | `fp16` | `int8`); training stays float. Use a **different `--name`** for each experiment so reports stay side-by-side.
@@ -50,6 +52,8 @@ See `notebooks/colab_baseline.ipynb`. Commit `reports/<run>/` and `reports/compa
 
 ```text
 models/baseline.py    training entrypoint
+models/spd.py         SPD-Conv stem only
+models/spd_full.py    full stride-2 SPD-Conv (backbone + neck)
 uav2uav.yaml          dataset paths / class names
 metrics/              epoch callback, final eval, plots, report, meta store
 weights/              demo checkpoint shelf + manifest

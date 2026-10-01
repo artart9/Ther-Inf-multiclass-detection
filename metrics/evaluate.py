@@ -202,7 +202,7 @@ def _export_tensorrt(
     quantize: str,
     data_yaml: str | None = None,
 ) -> Path | None:
-    """Export TensorRT engine at fp32 / fp16 / int8. Returns path or None."""
+    """Export TensorRT engine at fp32 / fp16 / int8 (batch=1). Returns path or None."""
     if not torch.cuda.is_available():
         return None
     if engine_path.is_file():
@@ -213,6 +213,7 @@ def _export_tensorrt(
         export_kw: dict = dict(
             format="engine",
             imgsz=imgsz,
+            batch=1,
             device=0,
             simplify=True,
             verbose=False,
@@ -238,8 +239,75 @@ def _export_tensorrt(
             engine_path.write_bytes(src.read_bytes())
         return engine_path if engine_path.is_file() else src
     except Exception as exc:
-        print(f"TensorRT export ({quantize}) failed ({exc}); falling back to PyTorch speed timing.")
+        print(f"TensorRT export ({quantize}) failed ({exc}); falling back to PyTorch.")
         return None
+
+
+def resolve_deploy_model(
+    weights: Path,
+    imgsz: int,
+    *,
+    engine_dir: Path,
+    quantize: str,
+    data_yaml: str | None = None,
+    float_model: YOLO | None = None,
+    prefer_tensorrt: bool = True,
+) -> dict:
+    """
+    Load the final deployable model at the requested quantize setting.
+
+    Prefers a TensorRT engine on CUDA (fp32|fp16|int8); otherwise falls back to
+    the float PyTorch checkpoint. All accuracy + latency metrics should use the
+    returned ``model``.
+    """
+    quantize = str(quantize).lower().strip()
+    if quantize not in {"fp32", "fp16", "int8"}:
+        raise ValueError(f"quantize must be fp32|fp16|int8, got {quantize!r}")
+
+    weights = Path(weights).resolve()
+    engine_dir = Path(engine_dir)
+    _ensure_custom_modules()
+    if float_model is None:
+        float_model = YOLO(str(weights))
+
+    imgsz = _align_imgsz(int(imgsz), _max_stride(float_model))
+    backend = "pytorch"
+    engine_path = None
+    deploy = float_model
+    artifact = weights
+
+    if prefer_tensorrt and weights.is_file():
+        candidate = _tensorrt_engine_path(weights, imgsz, engine_dir, quantize)
+        exported = _export_tensorrt(
+            weights,
+            imgsz,
+            candidate,
+            quantize=quantize,
+            data_yaml=data_yaml,
+        )
+        if exported is not None and exported.is_file():
+            try:
+                _ensure_custom_modules()
+                deploy = YOLO(str(exported))
+                backend = f"tensorrt_{quantize}"
+                engine_path = str(exported)
+                artifact = exported
+            except Exception as exc:
+                print(f"TensorRT load failed ({exc}); using PyTorch.")
+                deploy = float_model
+                backend = "pytorch"
+                engine_path = None
+                artifact = weights
+
+    return {
+        "model": deploy,
+        "float_model": float_model,
+        "backend": backend,
+        "quantize": quantize,
+        "engine_path": engine_path,
+        "artifact_path": Path(artifact),
+        "imgsz": imgsz,
+    }
 
 
 def _profile_ultralytics_speed(
@@ -277,14 +345,17 @@ def measure_latency(
     warmup: int = 10,
     timed_runs: int = 100,
     prefer_tensorrt: bool = True,
+    deploy: dict | None = None,
 ) -> dict:
     """
-    Latency à la Ultralytics detect Speed column:
+    Latency à la Ultralytics detect Speed column on the final deploy model:
     - Prefer TensorRT engine on CUDA at requested quantize (fp32|fp16|int8)
     - Else PyTorch model on the active device
     - Dummy image, batch=1, warmup + timed runs
     - Primary metric = results[0].speed['inference'] (pre/post excluded), sigma-clipped
     - `e2e` is aliased to inference so existing reports/plots match the table metric
+
+    Pass ``deploy`` from ``resolve_deploy_model`` to avoid re-exporting.
     """
     quantize = str(quantize).lower().strip()
     if quantize not in {"fp32", "fp16", "int8"}:
@@ -304,32 +375,34 @@ def measure_latency(
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats()
 
-    weights_path = Path(weights).resolve() if weights is not None else None
-    data_yaml_str = str(Path(data_yaml).resolve()) if data_yaml is not None else None
-    backend = "pytorch"
-    engine_path = None
-    profile_model = model
+    if deploy is None:
+        weights_path = Path(weights).resolve() if weights is not None else None
+        data_yaml_str = str(Path(data_yaml).resolve()) if data_yaml is not None else None
+        if prefer_tensorrt and weights_path is not None and weights_path.is_file():
+            cache = (
+                Path(engine_dir) if engine_dir is not None else weights_path.parent / "engines"
+            )
+            deploy = resolve_deploy_model(
+                weights_path,
+                imgsz,
+                engine_dir=cache,
+                quantize=quantize,
+                data_yaml=data_yaml_str,
+                float_model=model,
+                prefer_tensorrt=True,
+            )
+        else:
+            deploy = {
+                "model": model,
+                "backend": "pytorch",
+                "quantize": quantize,
+                "engine_path": None,
+                "imgsz": imgsz,
+            }
 
-    if prefer_tensorrt and weights_path is not None and weights_path.is_file():
-        cache = Path(engine_dir) if engine_dir is not None else weights_path.parent / "engines"
-        candidate = _tensorrt_engine_path(weights_path, imgsz, cache, quantize)
-        exported = _export_tensorrt(
-            weights_path,
-            imgsz,
-            candidate,
-            quantize=quantize,
-            data_yaml=data_yaml_str,
-        )
-        if exported is not None and exported.is_file():
-            try:
-                _ensure_custom_modules()
-                profile_model = YOLO(str(exported))
-                backend = f"tensorrt_{quantize}"
-                engine_path = str(exported)
-            except Exception as exc:
-                print(f"TensorRT load failed ({exc}); using PyTorch.")
-                profile_model = model
-                backend = "pytorch"
+    profile_model = deploy["model"]
+    backend = deploy.get("backend") or "pytorch"
+    engine_path = deploy.get("engine_path")
 
     pre_raw, infer_raw, post_raw = _profile_ultralytics_speed(
         profile_model, imgsz=imgsz, warmup=warmup, timed_runs=timed_runs
@@ -443,25 +516,57 @@ def _get_flops(model: torch.nn.Module, imgsz: int) -> float | None:
         return None
 
 
-def model_stats(model: YOLO, weights: Path, imgsz: int) -> dict:
-    params = sum(p.numel() for p in model.model.parameters())
-    gflops = _get_flops(model.model, imgsz=imgsz)
+def model_stats(
+    model: YOLO,
+    artifact: Path,
+    imgsz: int,
+    *,
+    float_model: YOLO | None = None,
+) -> dict:
+    """Params/GFLOPs from the float graph; weight_mb from the deploy artifact."""
+    graph = float_model or model
+    try:
+        params = sum(p.numel() for p in graph.model.parameters())
+    except Exception:
+        params = None
+    gflops = None
+    try:
+        gflops = _get_flops(graph.model, imgsz=imgsz)
+    except Exception:
+        gflops = None
+    artifact = Path(artifact)
     return {
-        "params": int(params),
+        "params": int(params) if params is not None else None,
         "gflops": gflops,
-        "weight_mb": weights.stat().st_size / (1024 ** 2),
+        "weight_mb": artifact.stat().st_size / (1024 ** 2) if artifact.is_file() else None,
+        "artifact": str(artifact),
     }
 
 
+def _val_split(model: YOLO, data_yaml: str, split: str, imgsz: int) -> dict:
+    """Validate on the deploy model (batch=1 for static TensorRT engines)."""
+    return _split_metrics(
+        model.val(
+            data=data_yaml,
+            split=split,
+            imgsz=imgsz,
+            batch=1,
+            plots=False,
+            verbose=False,
+        )
+    )
+
+
 def latency_accuracy_curve(
-    model: YOLO,
+    float_model: YOLO,
     data_yaml: str,
     weights: Path,
     engine_dir: Path,
     quantize: str = "fp16",
     sizes=(320, 480, 640, 800),
 ) -> list:
-    stride = _max_stride(model)
+    """Per-imgsz mAP + latency, both on the quantized deploy model for that size."""
+    stride = _max_stride(float_model)
     # Align each size; drop duplicates after alignment (e.g. 480 and 512 both -> 512).
     aligned = []
     seen = set()
@@ -473,21 +578,29 @@ def latency_accuracy_curve(
 
     curve = []
     for s in aligned:
-        val = model.val(data=data_yaml, split="test", imgsz=s, plots=False, verbose=False)
-        m = _split_metrics(val)
+        deploy = resolve_deploy_model(
+            weights,
+            s,
+            engine_dir=engine_dir,
+            quantize=quantize,
+            data_yaml=data_yaml,
+            float_model=float_model,
+        )
+        m = _val_split(deploy["model"], data_yaml, "test", deploy["imgsz"])
         lat = measure_latency(
-            model,
-            imgsz=s,
+            float_model,
+            imgsz=deploy["imgsz"],
             weights=weights,
             engine_dir=engine_dir,
             data_yaml=data_yaml,
             quantize=quantize,
             warmup=10,
             timed_runs=50,
+            deploy=deploy,
         )
         curve.append(
             {
-                "imgsz": lat.get("imgsz", s),
+                "imgsz": lat.get("imgsz", deploy["imgsz"]),
                 "imgsz_requested": lat.get("imgsz_requested", s),
                 "map50": m.get("map50"),
                 "map50_95": m.get("map50_95"),
@@ -508,6 +621,13 @@ def run(
     latency_n: int = 100,
     quantize: str = "fp16",
 ) -> dict:
+    """
+    Final eval on the post-quantized deploy model (TensorRT when available).
+
+    Accuracy (test/train/small-object), latency, and the latency–accuracy curve
+    all use the same backend resolved for ``quantize``. Params/GFLOPs still come
+    from the float training graph; ``weight_mb`` is the deploy artifact size.
+    """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     data_yaml = str(Path(data_yaml).resolve())
@@ -516,27 +636,40 @@ def run(
     quantize = str(quantize).lower().strip()
 
     _ensure_custom_modules()
-    model = YOLO(str(weights))
+    float_model = YOLO(str(weights))
 
     imgsz_requested = int(imgsz)
-    imgsz = _align_imgsz(imgsz_requested, _max_stride(model))
+    imgsz = _align_imgsz(imgsz_requested, _max_stride(float_model))
     if imgsz != imgsz_requested:
         print(
             f"Eval imgsz {imgsz_requested} -> {imgsz} "
-            f"(aligned to max stride {_max_stride(model)})"
+            f"(aligned to max stride {_max_stride(float_model)})"
         )
 
-    test_m = _split_metrics(
-        model.val(data=data_yaml, split="test", imgsz=imgsz, plots=False, verbose=False)
+    print(f"Resolving deploy model (quantize={quantize})...")
+    deploy = resolve_deploy_model(
+        weights,
+        imgsz,
+        engine_dir=engine_dir,
+        quantize=quantize,
+        data_yaml=data_yaml,
+        float_model=float_model,
     )
-    train_m = _split_metrics(
-        model.val(data=data_yaml, split="train", imgsz=imgsz, plots=False, verbose=False)
-    )
+    model = deploy["model"]
+    print(f"Eval backend: {deploy['backend']}")
+
+    test_m = _val_split(model, data_yaml, "test", imgsz)
+    train_m = _val_split(model, data_yaml, "train", imgsz)
     small = small_object_score(model, data_yaml, imgsz=imgsz)
 
-    stats = model_stats(model, weights, imgsz)
-    latency = measure_latency(
+    stats = model_stats(
         model,
+        deploy["artifact_path"],
+        imgsz,
+        float_model=float_model,
+    )
+    latency = measure_latency(
+        float_model,
         imgsz=imgsz,
         weights=weights,
         engine_dir=engine_dir,
@@ -544,9 +677,10 @@ def run(
         quantize=quantize,
         warmup=10,
         timed_runs=latency_n,
+        deploy=deploy,
     )
     curve = latency_accuracy_curve(
-        model,
+        float_model,
         data_yaml,
         weights=weights,
         engine_dir=engine_dir,
@@ -568,6 +702,8 @@ def run(
         "imgsz": imgsz,
         "imgsz_requested": imgsz_requested,
         "quantize": quantize,
+        "backend": deploy["backend"],
+        "engine_path": deploy.get("engine_path"),
         "device": latency.get("device") or _device_label(),
         "accuracy": {
             "map50": test_m.get("map50"),
@@ -579,6 +715,8 @@ def run(
                 "f1": train_m.get("f1"),
             },
             "small_object_score": small,
+            "backend": deploy["backend"],
+            "quantize": quantize,
         },
         "latency": latency,
         "model": {

@@ -28,7 +28,7 @@ from metrics.viz_style import (
     save_fig,
 )
 
-DEFAULT_IMGSZ = (128, 160, 256, 320)
+DEFAULT_IMGSZ = (64, 96, 128, 160, 224, 256, 320, 640)
 DEFAULT_NAME_TMPL = "uav2uav_yolo26n_baseline_imgsz{imgsz}"
 DEFAULT_QUANT_EXPS = (
     "baseline_imgsz160_fp32",
@@ -149,6 +149,7 @@ def load_imgsz_rows(
         e2e = lat.get("e2e") or {}
         model = summary.get("model") or {}
         acc = summary.get("accuracy") or {}
+        test = acc.get("test") or {}
         rows.append(
             {
                 "exp_name": report.get("exp_name", exp),
@@ -159,6 +160,7 @@ def load_imgsz_rows(
                 "gflops": model.get("gflops"),
                 "map50": acc.get("map50"),
                 "map50_95": acc.get("map50_95"),
+                "f1": test.get("f1"),
                 "small_object_score": acc.get("small_object_score"),
                 "device": report.get("device"),
             }
@@ -318,6 +320,57 @@ def plot_map_vs_latency_gflops(rows: list[dict], out_dir: Path) -> list[Path]:
     return written
 
 
+def plot_f1_vs_imgsz(
+    rows: list[dict],
+    out_dir: Path,
+    title: str = "Test F1 vs imgsz (baseline)",
+) -> list[Path]:
+    """Line/scatter of test-set F1 vs imgsz."""
+    apply_theme()
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    colors = palette()
+
+    usable = [r for r in rows if r.get("f1") is not None]
+    if not usable:
+        raise ValueError("No rows with test F1")
+
+    xs = [int(r["imgsz"]) for r in usable]
+    ys = [float(r["f1"]) for r in usable]
+    color = colors[0]
+    written: list[Path] = []
+
+    fig, ax = new_fig(FIGSIZE)
+    sns.lineplot(x=xs, y=ys, ax=ax, color=color, marker="o", markersize=9)
+    label_points(ax, xs, ys, xs)
+    finish_ax(ax, title=title, xlabel="imgsz (px)", ylabel="Test F1")
+    ax.set_ylim(0.0, 1.05)
+    ax.set_xticks(xs)
+    written.append(save_fig(fig, out_dir / "f1_vs_imgsz.png"))
+
+    fig_p = go.Figure(
+        data=[
+            go.Scatter(
+                x=xs,
+                y=ys,
+                mode="lines+markers+text",
+                text=[str(x) for x in xs],
+                textposition="top center",
+                marker=dict(size=12),
+                line=dict(width=2),
+                hovertemplate="imgsz=%{x}<br>F1=%{y:.4f}<extra></extra>",
+            )
+        ]
+    )
+    fig_p.update_layout(**PLOTLY_LAYOUT, title=title, showlegend=False)
+    fig_p.update_xaxes(title_text="imgsz (px)", tickvals=xs)
+    fig_p.update_yaxes(title_text="Test F1", range=[0, 1.05])
+    html = out_dir / "f1_vs_imgsz.html"
+    fig_p.write_html(html, include_plotlyjs="cdn")
+    written.append(html)
+    return written
+
+
 def plot_small_object_vs_gflops(
     rows: list[dict],
     out_dir: Path,
@@ -383,6 +436,84 @@ def plot_small_object_vs_gflops(
     return written
 
 
+def plot_f1_small_vs_gflops(
+    rows: list[dict],
+    out_dir: Path,
+    title: str = "Test F1 & small-object score vs compute (labeled by imgsz)",
+) -> list[Path]:
+    """Two lines on one y-axis (from 0): test F1 and small-object F1 vs GFLOPs."""
+    apply_theme()
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    colors = palette()
+
+    usable = [
+        r
+        for r in rows
+        if r.get("f1") is not None
+        and r.get("small_object_score") is not None
+        and r.get("gflops") is not None
+        and float(r["gflops"]) > 0
+    ]
+    if not usable:
+        raise ValueError("No rows with f1, small_object_score, and positive gflops")
+
+    xs = [float(r["gflops"]) for r in usable]
+    f1 = [float(r["f1"]) for r in usable]
+    small = [float(r["small_object_score"]) for r in usable]
+    labels = [r["imgsz"] for r in usable]
+    c_f1, c_small = colors[0], colors[2 % len(colors)]
+    written: list[Path] = []
+
+    fig, ax = new_fig(FIGSIZE)
+    sns.lineplot(
+        x=xs, y=f1, ax=ax, color=c_f1, marker="o", markersize=9, label="Test F1",
+        estimator=None, sort=False,
+    )
+    sns.lineplot(
+        x=xs, y=small, ax=ax, color=c_small, marker="s", markersize=8,
+        label="Small-object F1", estimator=None, sort=False,
+    )
+    label_points(ax, xs, f1, labels, dy=8)
+    label_points(ax, xs, small, labels, dy=-14)
+    finish_ax(ax, title=title, xlabel="GFLOPs", ylabel="F1")
+    ax.set_ylim(0.0, 1.05)
+    written.append(save_fig(fig, out_dir / "f1_small_vs_gflops.png"))
+
+    lab_txt = [str(s) for s in labels]
+    fig_p = go.Figure(
+        data=[
+            go.Scatter(
+                x=xs,
+                y=f1,
+                mode="markers+text+lines",
+                text=lab_txt,
+                textposition="top right",
+                marker=dict(size=12),
+                name="Test F1",
+                hovertemplate="imgsz=%{text}<br>GFLOPs=%{x:.4f}<br>Test F1=%{y:.4f}<extra></extra>",
+            ),
+            go.Scatter(
+                x=xs,
+                y=small,
+                mode="markers+text+lines",
+                text=lab_txt,
+                textposition="bottom right",
+                marker=dict(size=11, symbol="square"),
+                name="Small-object F1",
+                hovertemplate="imgsz=%{text}<br>GFLOPs=%{x:.4f}<br>Small-object F1=%{y:.4f}<extra></extra>",
+            ),
+        ]
+    )
+    fig_p.update_layout(**PLOTLY_LAYOUT, title=title)
+    fig_p.update_xaxes(title_text="GFLOPs")
+    fig_p.update_yaxes(title_text="F1", range=[0, 1.05])
+    html = out_dir / "f1_small_vs_gflops.html"
+    fig_p.write_html(html, include_plotlyjs="cdn")
+    written.append(html)
+    return written
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Meta-plot latency, GFLOPs, and small-object vs compute")
     p.add_argument("--reports-dir", type=Path, default=ROOT / "reports")
@@ -400,6 +531,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Only build the quantization latency boxplot",
     )
+    p.add_argument(
+        "--skip-quantize",
+        action="store_true",
+        help="Skip quantization boxplot (baseline imgsz plots only)",
+    )
     return p.parse_args()
 
 
@@ -414,6 +550,8 @@ def main() -> None:
         written.extend(plot_latency_gflops_vs_imgsz(rows, out))
         written.extend(plot_map_vs_latency_gflops(rows, out))
         written.extend(plot_small_object_vs_gflops(rows, out))
+        written.extend(plot_f1_vs_imgsz(rows, out))
+        written.extend(plot_f1_small_vs_gflops(rows, out))
         data_path = out / "imgsz_latency_gflops.json"
         data_path.write_text(json.dumps({"rows": rows}, indent=2) + "\n")
         print(f"Data: {data_path}")
@@ -424,41 +562,44 @@ def main() -> None:
             gflops_s = f"{gflops:.6f}" if gflops is not None else "—"
             e2e = r.get("e2e_mean_ms")
             e2e_s = f"{e2e:.4f}" if e2e is not None else "—"
+            f1 = r.get("f1")
+            f1_s = f"{f1:.4f}" if f1 is not None else "—"
             print(
-                f"  imgsz={r['imgsz']:>4}  mAP50-95={r['map50_95']:.4f}  "
+                f"  imgsz={r['imgsz']:>4}  F1={f1_s}  mAP50-95={r['map50_95']:.4f}  "
                 f"small={small_s}  e2e={e2e_s} ms  GFLOPs={gflops_s}"
             )
 
-    quant_rows = load_quantize_latency_rows(args.reports_dir, args.quantize_exps)
-    written.extend(plot_quantize_latency_boxplot(quant_rows, out))
-    quant_summary = []
-    for q in QUANT_ORDER:
-        subset = [r for r in quant_rows if r["quantize"] == q]
-        if not subset:
-            continue
-        vals = [r["e2e_ms"] for r in subset]
-        quant_summary.append(
-            {
-                "quantize": q,
-                "n": len(vals),
-                "mean_ms": sum(vals) / len(vals),
-                "p50_ms": sorted(vals)[len(vals) // 2],
-                "fps": subset[0].get("fps"),
-                "map50": subset[0].get("map50"),
-                "backend": subset[0].get("backend"),
-                "device": subset[0].get("device"),
-            }
+    if not args.skip_quantize:
+        quant_rows = load_quantize_latency_rows(args.reports_dir, args.quantize_exps)
+        written.extend(plot_quantize_latency_boxplot(quant_rows, out))
+        quant_summary = []
+        for q in QUANT_ORDER:
+            subset = [r for r in quant_rows if r["quantize"] == q]
+            if not subset:
+                continue
+            vals = [r["e2e_ms"] for r in subset]
+            quant_summary.append(
+                {
+                    "quantize": q,
+                    "n": len(vals),
+                    "mean_ms": sum(vals) / len(vals),
+                    "p50_ms": sorted(vals)[len(vals) // 2],
+                    "fps": subset[0].get("fps"),
+                    "map50": subset[0].get("map50"),
+                    "backend": subset[0].get("backend"),
+                    "device": subset[0].get("device"),
+                }
+            )
+        quant_path = out / "quantize_latency_boxplot.json"
+        quant_path.write_text(
+            json.dumps({"summary": quant_summary, "n_samples": len(quant_rows)}, indent=2) + "\n"
         )
-    quant_path = out / "quantize_latency_boxplot.json"
-    quant_path.write_text(
-        json.dumps({"summary": quant_summary, "n_samples": len(quant_rows)}, indent=2) + "\n"
-    )
-    print(f"Data: {quant_path}")
-    for s in quant_summary:
-        print(
-            f"  {s['quantize']:>4}  mean={s['mean_ms']:.4f} ms  "
-            f"p50={s['p50_ms']:.4f} ms  n={s['n']}  fps={s['fps']:.1f}"
-        )
+        print(f"Data: {quant_path}")
+        for s in quant_summary:
+            print(
+                f"  {s['quantize']:>4}  mean={s['mean_ms']:.4f} ms  "
+                f"p50={s['p50_ms']:.4f} ms  n={s['n']}  fps={s['fps']:.1f}"
+            )
 
     for p in written:
         print(f"Wrote {p}")

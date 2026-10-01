@@ -101,6 +101,7 @@ def build_plot_data(summary: dict, epochs: list, exp_name: str) -> dict:
         "imgsz": summary.get("imgsz"),
         "weights": summary.get("weights"),
         "quantize": summary.get("quantize") or lat.get("quantize"),
+        "backend": summary.get("backend") or lat.get("backend"),
         "plots": {
             "epochs": epochs,
             "latency_e2e_samples_ms": stages["e2e"]["samples_ms"],
@@ -110,8 +111,8 @@ def build_plot_data(summary: dict, epochs: list, exp_name: str) -> dict:
         "accuracy": acc,
         "fps": lat.get("fps"),
         "latency_method": lat.get("method"),
-        "latency_backend": lat.get("backend"),
-        "engine_path": lat.get("engine_path"),
+        "latency_backend": lat.get("backend") or summary.get("backend"),
+        "engine_path": lat.get("engine_path") or summary.get("engine_path"),
         "efficiency": summary.get("efficiency") or {},
         "model": summary.get("model") or {},
     }

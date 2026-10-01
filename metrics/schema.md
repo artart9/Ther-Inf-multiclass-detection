@@ -13,6 +13,7 @@ Definitions used by the training callback and final evaluation. Keep these stabl
 - F1: `2 * P * R / (P + R)` (0 if P = R = 0)
 - Small object: box area `< 32 * 32` pixels on the letterboxed model input
 - Small AP: AP@0.5 on GT/pred pairs where the GT box is small
+- **Final accuracy (test / train / small-object) and latency–accuracy curve mAP** are measured on the **same post-quantized deploy model** as latency (TensorRT engine at `--quantize` when CUDA is available; else float PyTorch). Val uses `batch=1` for static engines.
 
 ## Gradient metrics (per epoch)
 For each group `g ∈ {backbone, neck, head}`:
@@ -38,10 +39,14 @@ For each group `g ∈ {backbone, neck, head}`:
 - Stats: mean, std, p50, p95 + full `samples_ms` list
 - FPS = `1000 / mean(infer_ms)`
 - Metadata: `method`, `quantize`, `backend` (`tensorrt_fp16` | `tensorrt_int8` | `pytorch`), `device`, optional `engine_path`
-- Engines cached under `runs/.../metrics/engines/*_{quantize}.engine`
+- Engines cached under `runs/.../metrics/engines/*_{quantize}.engine` (export `batch=1`)
 - CLI: `python models/baseline.py --quantize fp16|int8|fp32` (default `fp16`; training stays float)
 - Saved per run to `reports/<exp>/latency.json` (+ local `runs/.../metrics/`)
 - Cross-run index: `reports/compare/latency_accuracy.jsonl`
+
+## Model cost (final only)
+- `params` / `gflops`: counted on the **float** training graph (architecture)
+- `weight_mb`: size of the **deploy artifact** (TensorRT engine when used, else `.pt`)
 
 ## Efficiency (final only)
 - `map_per_mb = map50 / weight_mb`
