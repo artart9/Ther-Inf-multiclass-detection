@@ -161,12 +161,24 @@ def load_imgsz_rows(
                 "map50": acc.get("map50"),
                 "map50_95": acc.get("map50_95"),
                 "f1": test.get("f1"),
-                "small_object_score": acc.get("small_object_score"),
+                "small_object_score": _scalar_small_from_acc(acc),
+                "small_object_scores": acc.get("small_object_scores"),
                 "device": report.get("device"),
             }
         )
     rows.sort(key=lambda r: r["imgsz"])
     return rows
+
+
+def _scalar_small_from_acc(acc: dict) -> float | None:
+    """32² F1 from table if present, else legacy scalar."""
+    table = acc.get("small_object_scores")
+    if isinstance(table, dict) and table.get("32") is not None:
+        cell = table["32"]
+        if isinstance(cell, dict):
+            return cell.get("f1")
+        return float(cell)
+    return acc.get("small_object_score")
 
 
 def plot_latency_gflops_vs_imgsz(

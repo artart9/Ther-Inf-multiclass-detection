@@ -23,11 +23,13 @@ def _split_metrics(results) -> dict:
     box = getattr(results, "box", results)
     p = float(getattr(box, "mp", 0.0) or 0.0)
     r = float(getattr(box, "mr", 0.0) or 0.0)
+    map50 = float(getattr(box, "map50", 0.0) or 0.0)
     return {
         "precision": p,
         "recall": r,
         "f1": _f1(p, r),
-        "map50": float(getattr(box, "map50", 0.0) or 0.0),
+        "ap": map50,  # AP@0.5 alias (single-class == mAP@0.5)
+        "map50": map50,
         "map50_95": float(getattr(box, "map", 0.0) or 0.0),
     }
 
@@ -64,17 +66,102 @@ def _iou(a, b) -> float:
     return inter / union if union > 0 else 0.0
 
 
-def small_object_score(model: YOLO, data_yaml: str, imgsz: int = 640, conf: float = 0.25) -> float:
-    """F1 on small boxes only (area < 32^2 on original image). See schema.md."""
-    small_thr = 32.0 * 32.0
+SMALL_OBJECT_SIDES = (64, 32, 16, 8)  # F1 / AP for boxes with area < side^2
+
+
+def _match_f1(gts: list, preds: list) -> tuple[float, float, float, int, int, int]:
+    """Greedy IoU≥0.5 matching → (f1, precision, recall, tps, fps, n_gt)."""
+    tps = fps = 0
+    matched = set()
+    for pb in preds:
+        best_iou, best_j = 0.0, -1
+        for j, gb in enumerate(gts):
+            if j in matched:
+                continue
+            iou = _iou(pb, gb)
+            if iou > best_iou:
+                best_iou, best_j = iou, j
+        if best_iou >= 0.5 and best_j >= 0:
+            tps += 1
+            matched.add(best_j)
+        else:
+            fps += 1
+    n_gt = len(gts)
+    fn = max(n_gt - tps, 0)
+    prec = tps / (tps + fps) if (tps + fps) else 0.0
+    rec = tps / (tps + fn) if (tps + fn) else 0.0
+    return _f1(prec, rec), prec, rec, tps, fps, n_gt
+
+
+def _average_precision(gts: list, preds: list, scores: list, iou_thr: float = 0.5) -> float:
+    """VOC-style AP@iou_thr for one image or pooled dets (score-sorted)."""
+    n_gt = len(gts)
+    if n_gt == 0:
+        return 0.0 if preds else 1.0
+    if not preds:
+        return 0.0
+
+    order = sorted(range(len(preds)), key=lambda i: scores[i], reverse=True)
+    matched = set()
+    tp = []
+    fp = []
+    for i in order:
+        pb = preds[i]
+        best_iou, best_j = 0.0, -1
+        for j, gb in enumerate(gts):
+            if j in matched:
+                continue
+            iou = _iou(pb, gb)
+            if iou > best_iou:
+                best_iou, best_j = iou, j
+        if best_iou >= iou_thr and best_j >= 0:
+            matched.add(best_j)
+            tp.append(1)
+            fp.append(0)
+        else:
+            tp.append(0)
+            fp.append(1)
+
+    tp_cum = np.cumsum(tp)
+    fp_cum = np.cumsum(fp)
+    recalls = tp_cum / n_gt
+    precisions = tp_cum / np.maximum(tp_cum + fp_cum, 1e-12)
+    # All-point interpolation
+    mrec = np.concatenate(([0.0], recalls, [1.0]))
+    mpre = np.concatenate(([0.0], precisions, [0.0]))
+    for i in range(len(mpre) - 1, 0, -1):
+        mpre[i - 1] = max(mpre[i - 1], mpre[i])
+    idx = np.where(mrec[1:] != mrec[:-1])[0]
+    return float(np.sum((mrec[idx + 1] - mrec[idx]) * mpre[idx + 1]))
+
+
+def small_object_scores(
+    model: YOLO,
+    data_yaml: str,
+    imgsz: int = 640,
+    conf: float = 0.25,
+    sides: tuple[int, ...] = SMALL_OBJECT_SIDES,
+) -> dict:
+    """
+    Per-threshold small-object F1 and AP@0.5 on the test split.
+
+    For each side in ``sides``, keep GT/pred boxes with area < side^2 (original
+    image pixels), match at IoU ≥ 0.5. One predict pass per image.
+    Keys are string side sizes, e.g. ``\"32\"`` → metrics for area < 32².
+    """
     root, _ = _dataset_root(data_yaml)
     images = _list_images(data_yaml, "test")
     label_dir = root / "test" / "labels"
-    tps = fps = n_gt = 0
+    thr = {int(s): float(s) * float(s) for s in sides}
+    # Per-threshold accumulators (F1 greedy + pooled scored dets for AP)
+    buckets = {
+        int(s): {"tps": 0, "fps": 0, "n_gt": 0, "preds": [], "scores": [], "gts": []}
+        for s in sides
+    }
 
     for img_path in images:
         w, h = Image.open(img_path).size
-        gts = []
+        all_gts = []
         label_path = label_dir / f"{img_path.stem}.txt"
         if label_path.exists():
             for line in label_path.read_text().strip().splitlines():
@@ -84,37 +171,77 @@ def small_object_score(model: YOLO, data_yaml: str, imgsz: int = 640, conf: floa
                 _, cx, cy, bw, bh = map(float, parts[:5])
                 pw, ph = bw * w, bh * h
                 x1, y1 = cx * w - pw / 2, cy * h - ph / 2
-                box = [x1, y1, x1 + pw, y1 + ph]
-                if _box_area(box) < small_thr:
-                    gts.append(box)
-        n_gt += len(gts)
+                all_gts.append([x1, y1, x1 + pw, y1 + ph])
 
         pred = model.predict(str(img_path), imgsz=imgsz, conf=conf, verbose=False)[0]
-        preds = []
+        all_preds = []
+        all_scores = []
         if pred.boxes is not None and len(pred.boxes):
-            for b in pred.boxes.xyxy.cpu().numpy():
-                if _box_area(b) < small_thr:
-                    preds.append(b.tolist())
+            xyxy = pred.boxes.xyxy.cpu().numpy()
+            confs = pred.boxes.conf.cpu().numpy()
+            for b, s in zip(xyxy, confs):
+                all_preds.append(b.tolist())
+                all_scores.append(float(s))
 
-        matched = set()
-        for pb in preds:
-            best_iou, best_j = 0.0, -1
-            for j, gb in enumerate(gts):
-                if j in matched:
-                    continue
-                iou = _iou(pb, gb)
-                if iou > best_iou:
-                    best_iou, best_j = iou, j
-            if best_iou >= 0.5 and best_j >= 0:
-                tps += 1
-                matched.add(best_j)
-            else:
-                fps += 1
+        for side, area_thr in thr.items():
+            gts = [b for b in all_gts if _box_area(b) < area_thr]
+            keep = [i for i, b in enumerate(all_preds) if _box_area(b) < area_thr]
+            preds = [all_preds[i] for i in keep]
+            scores = [all_scores[i] for i in keep]
+            _, _, _, tps, fps, n_gt = _match_f1(gts, preds)
+            buckets[side]["tps"] += tps
+            buckets[side]["fps"] += fps
+            buckets[side]["n_gt"] += n_gt
+            # Pool across images for global AP (offset GT indices via separate lists)
+            # Compute per-image AP contribution via concatenating with image tags:
+            buckets[side]["gts"].append(gts)
+            buckets[side]["preds"].append(preds)
+            buckets[side]["scores"].append(scores)
 
-    fn = max(n_gt - tps, 0)
-    prec = tps / (tps + fps) if (tps + fps) else 0.0
-    rec = tps / (tps + fn) if (tps + fn) else 0.0
-    return _f1(prec, rec)
+    out = {}
+    for side in sides:
+        b = buckets[int(side)]
+        tps, fps, n_gt = b["tps"], b["fps"], b["n_gt"]
+        fn = max(n_gt - tps, 0)
+        prec = tps / (tps + fps) if (tps + fps) else 0.0
+        rec = tps / (tps + fn) if (tps + fn) else 0.0
+        # Mean AP over images that have ≥1 small GT (skip empty-GT images)
+        aps = []
+        for gts, preds, scores in zip(b["gts"], b["preds"], b["scores"]):
+            if not gts:
+                continue
+            aps.append(_average_precision(gts, preds, scores, iou_thr=0.5))
+        ap = float(sum(aps) / len(aps)) if aps else 0.0
+        out[str(int(side))] = {
+            "f1": _f1(prec, rec),
+            "ap": ap,
+            "precision": prec,
+            "recall": rec,
+            "tps": tps,
+            "fps": fps,
+            "n_gt": n_gt,
+            "area_lt": int(side) * int(side),
+        }
+    return out
+
+
+def small_object_score(model: YOLO, data_yaml: str, imgsz: int = 640, conf: float = 0.25) -> float:
+    """Backward-compatible scalar: F1 for area < 32²."""
+    table = small_object_scores(model, data_yaml, imgsz=imgsz, conf=conf)
+    return float((table.get("32") or {}).get("f1") or 0.0)
+
+
+def _scalar_small_object(acc: dict | None) -> float | None:
+    """Prefer table['32'].f1; fall back to legacy scalar small_object_score."""
+    if not acc:
+        return None
+    table = acc.get("small_object_scores")
+    if isinstance(table, dict) and table.get("32") is not None:
+        cell = table["32"]
+        if isinstance(cell, dict):
+            return cell.get("f1")
+        return float(cell)
+    return acc.get("small_object_score")
 
 
 def _iterative_sigma_clipping(
@@ -660,7 +787,8 @@ def run(
 
     test_m = _val_split(model, data_yaml, "test", imgsz)
     train_m = _val_split(model, data_yaml, "train", imgsz)
-    small = small_object_score(model, data_yaml, imgsz=imgsz)
+    small_table = small_object_scores(model, data_yaml, imgsz=imgsz)
+    small = float((small_table.get("32") or {}).get("f1") or 0.0)
 
     stats = model_stats(
         model,
@@ -697,6 +825,10 @@ def run(
     except ValueError:
         weights_str = str(weights)
 
+    small_ap = None
+    if isinstance(small_table, dict) and isinstance(small_table.get("32"), dict):
+        small_ap = small_table["32"].get("ap")
+
     summary = {
         "weights": weights_str,
         "imgsz": imgsz,
@@ -706,6 +838,7 @@ def run(
         "engine_path": deploy.get("engine_path"),
         "device": latency.get("device") or _device_label(),
         "accuracy": {
+            "ap": test_m.get("ap", map50),
             "map50": test_m.get("map50"),
             "map50_95": test_m.get("map50_95"),
             "test": test_m,
@@ -715,6 +848,8 @@ def run(
                 "f1": train_m.get("f1"),
             },
             "small_object_score": small,
+            "small_object_ap": small_ap,
+            "small_object_scores": small_table,
             "backend": deploy["backend"],
             "quantize": quantize,
         },

@@ -52,6 +52,7 @@ def plot_epochs(metrics_dir: Path) -> None:
 
     # --- Detection metrics ---
     series = {
+        "AP@0.5": [r.get("ap", r.get("map50")) for r in rows],
         "mAP50-95": [r.get("map50_95") for r in rows],
         "P": [r.get("precision") for r in rows],
         "R": [r.get("recall") for r in rows],

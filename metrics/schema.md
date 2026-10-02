@@ -11,9 +11,14 @@ Definitions used by the training callback and final evaluation. Keep these stabl
 - Confidence / IoU / NMS: Ultralytics defaults unless overridden
 - Image size (baseline): **640**
 - F1: `2 * P * R / (P + R)` (0 if P = R = 0)
-- Small object: box area `< 32 * 32` pixels on the letterboxed model input
-- Small AP: AP@0.5 on GT/pred pairs where the GT box is small
+- **AP**: AP@0.5 (= Ultralytics `mAP50` / `metrics/mAP50(B)`); also stored as `ap` in epoch logs and final summary
+- Small-object scores: F1 **and AP@0.5** on test boxes with **area `< side²`** on the **original image**, for `side ∈ {64, 32, 16, 8}` (IoU ≥ 0.5, conf = 0.25). Stored as `accuracy.small_object_scores` table; `accuracy.small_object_score` / `small_object_ap` are the **32** F1 / AP entries
 - **Final accuracy (test / train / small-object) and latency–accuracy curve mAP** are measured on the **same post-quantized deploy model** as latency (TensorRT engine at `--quantize` when CUDA is available; else float PyTorch). Val uses `batch=1` for static engines.
+
+## NWD loss (YOLO26n-NWD)
+- Entry: `python models/nwd.py` — installs NWD box criterion on YOLO26n
+- `NWD = exp(-√W₂² / C)` with `--nwd-constant` / `C` default **12.8**; `--iou-ratio` default **0.5**
+- Box objective: `r * CIoU + (1-r) * (1-NWD)`; logged train losses include **`nwd_loss`** (visible in `epochs.jsonl` / callback print / report epoch table)
 
 ## Gradient metrics (per epoch)
 For each group `g ∈ {backbone, neck, head}`:

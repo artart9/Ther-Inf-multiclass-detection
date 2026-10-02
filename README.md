@@ -22,6 +22,7 @@ git clone https://github.com/GabryV00/ThermalUAV2UAV_Dataset.git data/ThermalUAV
 python models/baseline.py                          # defaults: 50 epochs, imgsz 640, batch 16, quantize fp16
 python models/baseline.py --epochs 20 --imgsz 640 --batch 16 --quantize int8 --name uav2uav_yolo26n_baseline_int8
 python models/p2.py --imgsz 640 --batch 16         # official YOLO26n-P2 (Detect P2/4–P5/32)
+python models/nwd.py --nwd-constant 12.8           # YOLO26n + NWD box loss (logs nwd_loss)
 python models/spd.py --factor 2 --imgsz 160          # SPD stem only
 python models/spd_full.py --imgsz 320 --batch 64   # all stride-2 Convs -> SPD-Conv (factor=2)
 ```
@@ -54,6 +55,7 @@ See `notebooks/colab_baseline.ipynb`. Commit `reports/<run>/` and `reports/compa
 ```text
 models/baseline.py    training entrypoint
 models/p2.py          official YOLO26n-P2 (extra P2/4 head)
+models/nwd.py         YOLO26n + NWD box loss (C=12.8)
 models/spd.py         SPD-Conv stem only
 models/spd_full.py    full stride-2 SPD-Conv (backbone + neck)
 uav2uav.yaml          dataset paths / class names

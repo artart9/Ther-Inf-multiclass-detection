@@ -172,6 +172,7 @@ def save_run_plot_data(
             "map50": (plot_data.get("accuracy") or {}).get("map50"),
             "map50_95": (plot_data.get("accuracy") or {}).get("map50_95"),
             "small_object_score": (plot_data.get("accuracy") or {}).get("small_object_score"),
+            "small_object_scores": (plot_data.get("accuracy") or {}).get("small_object_scores"),
         },
         "fps": plot_data.get("fps"),
         "stages": stages,

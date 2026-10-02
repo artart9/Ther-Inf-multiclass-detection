@@ -1,6 +1,6 @@
 # Experiment report: `spd_im640_f4`
 
-- Generated (UTC): `2026-09-28T22:41:06.994797+00:00`
+- Generated (UTC): `2026-09-29T12:23:26.821419+00:00`
 - Weights: `runs/spd_im640_f4/weights/best.pt`
 - imgsz: `640`
 - quantize: `int8`
@@ -24,41 +24,42 @@ YOLO26n-SPD (SPD-Conv stem, factor=4) on ThermalUAV2UAV (epochs=100, imgsz=640, 
 - Quantize: `int8`
 - Backend: `tensorrt_int8`
 - Device: `cuda:NVIDIA L4`
+- Timed imgsz: `640`
 
 | Stage | mean ms |
 |---|---|
-| preprocess | 0.6596 |
-| infer (primary) | 0.5855 |
-| post | 0.5023 |
-| e2e (= infer) | 0.5855 |
-| FPS | 1707.9432 |
+| preprocess | 0.6893 |
+| infer (primary) | 0.6054 |
+| post | 0.5668 |
+| e2e (= infer) | 0.6054 |
+| FPS | 1651.8649 |
 
 ## Model cost
 
 | Metric | Value |
 |---|---|
 | Params | 2510670 |
-| GFLOPs | 0.000 |
+| GFLOPs | 1.782 |
 | Weight MB | 5.12 |
-| Peak RSS MB | 12904.1 |
-| Peak VRAM MB | 295.9 |
+| Peak RSS MB | 12896.6 |
+| Peak VRAM MB | 295.0 |
 
 ## Efficiency
 
 | Metric | Value |
 |---|---|
 | mAP / MB | 0.1904 |
-| mAP / GFLOP | — |
-| mAP × FPS | 1663.2708 |
+| mAP / GFLOP | 0.5466 |
+| mAP × FPS | 1608.6593 |
 
 ## Latency–accuracy curve
 
 | imgsz | mAP50 | mAP50-95 | infer ms | FPS | backend |
 |---|---|---|---|---|---|
-| 320 | 0.8799 | 0.5585 | 0.5522 | 1810.9313 | tensorrt_int8 |
-| 480 | 0.9583 | 0.6907 | 0.5647 | 1770.7462 | tensorrt_int8 |
-| 640 | 0.9738 | 0.7268 | 0.5846 | 1710.4439 | tensorrt_int8 |
-| 800 | 0.9668 | 0.7106 | 0.6498 | 1538.8521 | tensorrt_int8 |
+| 320 | 0.8799 | 0.5585 | 0.5570 | 1795.1803 | tensorrt_int8 |
+| 512 | 0.9642 | 0.6921 | 0.5842 | 1711.6307 | tensorrt_int8 |
+| 640 | 0.9738 | 0.7268 | 0.6020 | 1661.1270 | tensorrt_int8 |
+| 832 | 0.9703 | 0.7155 | 0.6745 | 1482.5966 | tensorrt_int8 |
 
 ## Epoch log
 

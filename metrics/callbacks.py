@@ -121,6 +121,7 @@ class MetricsCallback:
         r = float(_metric(m, "metrics/recall(B)", "metrics/recall", default=0.0) or 0.0)
         map50 = _metric(m, "metrics/mAP50(B)", "metrics/mAP50")
         map5095 = _metric(m, "metrics/mAP50-95(B)", "metrics/mAP50-95")
+        ap = None if map50 is None else float(map50)  # AP@0.5
 
         loss = {}
         for key, val in m.items():
@@ -133,15 +134,22 @@ class MetricsCallback:
         tloss = getattr(trainer, "tloss", None)
         loss_names = getattr(trainer, "loss_names", None)
         if tloss is not None and loss_names is not None:
-            if torch.is_tensor(tloss):
-                vals = tloss.detach().cpu().flatten().tolist()
+            if isinstance(tloss, dict):
+                for name, val in tloss.items():
+                    try:
+                        loss[str(name)] = float(val.item() if hasattr(val, "item") else val)
+                    except (TypeError, ValueError):
+                        continue
             else:
-                vals = list(tloss)
-            for name, val in zip(list(loss_names), vals):
-                try:
-                    loss[str(name)] = float(val)
-                except (TypeError, ValueError):
-                    continue
+                if torch.is_tensor(tloss):
+                    vals = tloss.detach().cpu().flatten().tolist()
+                else:
+                    vals = list(tloss)
+                for name, val in zip(list(loss_names), vals):
+                    try:
+                        loss[str(name)] = float(val)
+                    except (TypeError, ValueError):
+                        continue
 
         grad_norm = {}
         grad_pct = {}
@@ -157,6 +165,7 @@ class MetricsCallback:
         row = {
             "epoch": epoch_1based,
             "time_utc": datetime.now(timezone.utc).isoformat(),
+            "ap": ap,
             "map50": None if map50 is None else float(map50),
             "map50_95": None if map5095 is None else float(map5095),
             "precision": p,
@@ -185,6 +194,7 @@ class MetricsCallback:
         grad_s = "/".join(self._fmt(gp.get(k), 4) for k in ("backbone", "neck", "head"))
         print(
             f"\n[metrics] epoch {row['epoch']} (val)  "
+            f"AP={self._fmt(row.get('ap'))}  "
             f"mAP50={self._fmt(row.get('map50'))}  "
             f"mAP50-95={self._fmt(row.get('map50_95'))}  "
             f"P={self._fmt(row.get('precision'))}  "

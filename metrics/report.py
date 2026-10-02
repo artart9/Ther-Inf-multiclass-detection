@@ -82,11 +82,39 @@ def build_report(
         "",
         "| Metric | Value |",
         "|---|---|",
+        f"| AP@0.5 | {_fmt(acc.get('ap', acc.get('map50')))} |",
         f"| mAP@0.5 | {_fmt(acc.get('map50'))} |",
         f"| mAP@0.5:0.95 | {_fmt(acc.get('map50_95'))} |",
         f"| Test P / R / F1 | {_fmt(test.get('precision'))} / {_fmt(test.get('recall'))} / {_fmt(test.get('f1'))} |",
         f"| Train P / R / F1 | {_fmt(train.get('precision'))} / {_fmt(train.get('recall'))} / {_fmt(train.get('f1'))} |",
-        f"| Small-object score | {_fmt(acc.get('small_object_score'))} |",
+        f"| Small-object AP@0.5 (32²) | {_fmt(acc.get('small_object_ap'))} |",
+        "",
+        "## Small-object F1 / AP (area < side², original image px)",
+        "",
+        "| Max side (px) | Area < | F1 | AP@0.5 | P | R | n_gt |",
+        "|---|---|---|---|---|---|---|",
+    ]
+
+    small_table = acc.get("small_object_scores")
+    if isinstance(small_table, dict) and small_table:
+        for side in ("64", "32", "16", "8"):
+            cell = small_table.get(side) or {}
+            if not isinstance(cell, dict):
+                cell = {"f1": cell}
+            area = cell.get("area_lt") or (int(side) * int(side))
+            lines.append(
+                f"| {side}×{side} | {area} | {_fmt(cell.get('f1'))} | "
+                f"{_fmt(cell.get('ap'))} | "
+                f"{_fmt(cell.get('precision'))} | {_fmt(cell.get('recall'))} | "
+                f"{cell.get('n_gt', '—')} |"
+            )
+    else:
+        lines.append(
+            f"| 32×32 | 1024 | {_fmt(acc.get('small_object_score'))} | "
+            f"{_fmt(acc.get('small_object_ap'))} | — | — | — |"
+        )
+
+    lines += [
         "",
         "## Latency (Ultralytics inference-only, batch=1)",
         "",
@@ -143,15 +171,18 @@ def build_report(
         "",
         "## Epoch log",
         "",
-        "| epoch | mAP50-95 | P | R | F1 | grad% bb/neck/head |",
-        "|---|---|---|---|---|---|",
+        "| epoch | AP@0.5 | mAP50-95 | P | R | F1 | nwd_loss | grad% bb/neck/head |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for r in epochs:
         gp = r.get("grad_pct") or {}
         g = "/".join(_fmt(gp.get(k), 4) for k in ("backbone", "neck", "head"))
+        loss = r.get("loss") or {}
+        nwd = loss.get("nwd_loss")
         lines.append(
-            f"| {r.get('epoch')} | {_fmt(r.get('map50_95'))} | {_fmt(r.get('precision'))} "
-            f"| {_fmt(r.get('recall'))} | {_fmt(r.get('f1'))} | {g} |"
+            f"| {r.get('epoch')} | {_fmt(r.get('ap', r.get('map50')))} | {_fmt(r.get('map50_95'))} "
+            f"| {_fmt(r.get('precision'))} | {_fmt(r.get('recall'))} | {_fmt(r.get('f1'))} "
+            f"| {_fmt(nwd)} | {g} |"
         )
 
     lines += [
