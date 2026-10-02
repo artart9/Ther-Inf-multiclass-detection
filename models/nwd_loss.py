@@ -190,12 +190,24 @@ class NWDDetectionLoss(v8DetectionLoss):
         )
 
 
+def _as_detection_model(obj):
+    """Resolve YOLO wrapper / DDP / DetectionModel to the DetectionModel instance."""
+    while hasattr(obj, "module"):
+        obj = obj.module
+    if hasattr(obj, "init_criterion"):
+        return obj
+    inner = getattr(obj, "model", None)
+    if inner is not None and hasattr(inner, "init_criterion"):
+        return inner
+    raise TypeError(f"Cannot resolve DetectionModel from {type(obj)!r}")
+
+
 def install_nwd_criterion(
-    yolo_model,
+    yolo_or_nn_model,
     constant: float = 12.8,
     iou_ratio: float = 0.5,
 ) -> None:
-    """Patch YOLO DetectionModel so training uses NWDDetectionLoss (E2E-aware)."""
+    """Patch DetectionModel so ``init_criterion`` builds NWDDetectionLoss (E2E-aware)."""
 
     def make_loss(m, tal_topk: int = 10, tal_topk2: int | None = None):
         return NWDDetectionLoss(
@@ -211,6 +223,44 @@ def install_nwd_criterion(
             return E2ELoss(self, loss_fn=make_loss)
         return make_loss(self)
 
-    nn_model = yolo_model.model if hasattr(yolo_model, "model") else yolo_model
+    nn_model = _as_detection_model(yolo_or_nn_model)
     nn_model.init_criterion = types.MethodType(init_criterion, nn_model)
     nn_model.criterion = None
+
+
+def attach_nwd(
+    yolo_model,
+    constant: float = 12.8,
+    iou_ratio: float = 0.5,
+) -> None:
+    """Install NWD now and again after Ultralytics finishes building the trainer model.
+
+    ``YOLO.train()`` rebuilds ``self.model`` via ``trainer.get_model(...)``, wiping any
+    prior ``init_criterion`` patch. ``on_pretrain_routine_start`` fires in
+    ``Trainer.__init__`` *before* the nn.Module exists, so we re-apply on
+    ``on_pretrain_routine_end`` / ``on_train_start`` (after ``_setup_train``).
+    """
+    install_nwd_criterion(yolo_model, constant=constant, iou_ratio=iou_ratio)
+
+    def _reinstall(trainer) -> None:
+        model = getattr(trainer, "model", None)
+        if not isinstance(model, torch.nn.Module):
+            return  # Trainer.__init__ fires start before the Module exists
+        install_nwd_criterion(model, constant=constant, iou_ratio=iou_ratio)
+        # Confirm criterion exposes nwd_loss for tloss / MetricsCallback
+        det = _as_detection_model(model)
+        crit = det.init_criterion()
+        det.criterion = crit
+        inner = getattr(crit, "one2one", crit)
+        names = getattr(inner, "loss_names", ())
+        print(
+            f"[nwd] criterion ready on trainer model "
+            f"(C={constant}, iou_ratio={iou_ratio}; loss_names={names})",
+            flush=True,
+        )
+        if "nwd_loss" not in names:
+            raise RuntimeError(f"NWD install failed; loss_names={names}")
+
+    # End of _setup_train (model built) and again right before the epoch loop
+    yolo_model.add_callback("on_pretrain_routine_end", _reinstall)
+    yolo_model.add_callback("on_train_start", _reinstall)

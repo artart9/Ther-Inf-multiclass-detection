@@ -17,7 +17,7 @@ from metrics.evaluate import run as evaluate_run
 from metrics.meta_store import save_run_plot_data
 from metrics.plots import plot_all
 from metrics.report import build_report
-from models.nwd_loss import install_nwd_criterion
+from models.nwd_loss import attach_nwd
 from weights_store import save_demo_weights
 
 DATA_YAML = ROOT / "uav2uav.yaml"
@@ -78,7 +78,7 @@ def main() -> None:
     metrics_dir.mkdir(parents=True, exist_ok=True)
 
     model = YOLO(args.model)
-    install_nwd_criterion(
+    attach_nwd(
         model,
         constant=args.nwd_constant,
         iou_ratio=args.iou_ratio,

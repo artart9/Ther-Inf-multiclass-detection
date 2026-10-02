@@ -133,14 +133,14 @@ class MetricsCallback:
 
         tloss = getattr(trainer, "tloss", None)
         loss_names = getattr(trainer, "loss_names", None)
-        if tloss is not None and loss_names is not None:
+        if tloss is not None:
             if isinstance(tloss, dict):
                 for name, val in tloss.items():
                     try:
                         loss[str(name)] = float(val.item() if hasattr(val, "item") else val)
                     except (TypeError, ValueError):
                         continue
-            else:
+            elif loss_names is not None:
                 if torch.is_tensor(tloss):
                     vals = tloss.detach().cpu().flatten().tolist()
                 else:
